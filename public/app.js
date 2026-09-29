@@ -132,7 +132,6 @@ function layoutCanvas() {
   const scale = Math.min(
     maxWidth / state.image.naturalWidth,
     maxHeight / state.image.naturalHeight,
-    1,
   );
   const width = Math.max(1, Math.round(state.image.naturalWidth * scale));
   const height = Math.max(1, Math.round(state.image.naturalHeight * scale));
