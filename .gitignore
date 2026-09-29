@@ -1,4 +1,5 @@
 .image-buddy/
+dist/
 coverage/
 node_modules/
 npm-debug.log*

@@ -1,6 +1,9 @@
 const MAX_BYTES = 10 * 1024 * 1024;
 const params = new URLSearchParams(window.location.search);
-const token = params.get('token') || '';
+const configuredApiUrl =
+  document.querySelector('meta[name="image-buddy-api"]')?.getAttribute('content') || '';
+const configuredApi = configuredApiUrl ? new URL(configuredApiUrl) : null;
+const token = configuredApi?.searchParams.get('token') || params.get('token') || '';
 
 const dropZone = document.querySelector('#drop-zone');
 const fileInput = document.querySelector('#file-input');
@@ -116,7 +119,11 @@ async function upload() {
   setNotice();
 
   try {
-    const response = await fetch(`/api/upload?token=${encodeURIComponent(token)}`, {
+    const uploadUrl = configuredApi
+      ? new URL('/api/upload', configuredApi)
+      : new URL('/api/upload', window.location.origin);
+    uploadUrl.searchParams.set('token', token);
+    const response = await fetch(uploadUrl, {
       method: 'POST',
       headers: {
         'Content-Type': selectedFile.type || 'application/octet-stream',

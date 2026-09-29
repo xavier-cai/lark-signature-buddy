@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
+import { createServer as createSecureServer } from 'node:https';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -10,6 +11,8 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const PORT = Number.parseInt(process.env.IMAGE_BUDDY_PORT || '32180', 10);
 const HOST = process.env.IMAGE_BUDDY_HOST || '0.0.0.0';
 const PROFILE = process.env.IMAGE_BUDDY_PROFILE || 'image-buddy';
+const TLS_CERT_FILE = process.env.IMAGE_BUDDY_TLS_CERT || '';
+const TLS_KEY_FILE = process.env.IMAGE_BUDDY_TLS_KEY || '';
 const ACCESS_TOKEN = process.env.IMAGE_BUDDY_ACCESS_TOKEN || randomBytes(24).toString('base64url');
 const TOKEN_HASH = createHash('sha256').update(ACCESS_TOKEN).digest();
 const WINDOW_MS = 60_000;
@@ -186,7 +189,7 @@ async function serveAsset(response, name, contentType) {
   response.end(body);
 }
 
-const server = createServer(async (request, response) => {
+async function handleRequest(request, response) {
   try {
     const requestUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
 
@@ -257,13 +260,25 @@ const server = createServer(async (request, response) => {
       message: statusCode === 500 ? `上传失败：${error.message}` : error.message,
     });
   }
-});
+}
 
 if (fileURLToPath(import.meta.url) === process.argv[1]) {
+  const useTls = Boolean(TLS_CERT_FILE && TLS_KEY_FILE);
+  const server = useTls
+    ? createSecureServer(
+        {
+          cert: await readFile(TLS_CERT_FILE),
+          key: await readFile(TLS_KEY_FILE),
+        },
+        handleRequest,
+      )
+    : createServer(handleRequest);
+
   server.listen(PORT, HOST, () => {
     const shownHost = HOST === '0.0.0.0' ? process.env.MY_HOST_IP || '127.0.0.1' : HOST;
-    console.log(`IMAGE_BUDDY_URL=http://${shownHost}:${PORT}/?token=${ACCESS_TOKEN}`);
-    console.log(`IMAGE_BUDDY_HEALTH=http://${shownHost}:${PORT}/healthz`);
+    const scheme = useTls ? 'https' : 'http';
+    console.log(`IMAGE_BUDDY_URL=${scheme}://${shownHost}:${PORT}/?token=${ACCESS_TOKEN}`);
+    console.log(`IMAGE_BUDDY_HEALTH=${scheme}://${shownHost}:${PORT}/healthz`);
   });
 
   function shutdown() {
