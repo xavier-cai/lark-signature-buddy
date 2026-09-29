@@ -494,7 +494,7 @@ function renderResults(generated) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'copy-key';
-    button.textContent = '复制图片';
+    button.textContent = '复制此图';
     button.addEventListener('click', () => copyImage(item, button));
     const code = document.createElement('code');
     code.textContent = '粘贴给图片仔后获取 Image Key';
