@@ -62,18 +62,22 @@
             <div class="section-heading">
               <div>
                 <p class="step-label">网格</p>
-                <h2>选择切图规格</h2>
+                <h2>输入切图规格</h2>
               </div>
               <span class="tile-count" id="tile-count">4 张</span>
             </div>
-            <div class="grid-options" id="grid-options" role="radiogroup" aria-label="网格规格">
-              <button type="button" data-grid="1x2">1 × 2</button>
-              <button type="button" data-grid="2x1">2 × 1</button>
-              <button type="button" data-grid="2x2" class="selected">2 × 2</button>
-              <button type="button" data-grid="2x3">2 × 3</button>
-              <button type="button" data-grid="3x2">3 × 2</button>
-              <button type="button" data-grid="3x3">3 × 3</button>
+            <div class="grid-inputs">
+              <label>
+                <span>列数</span>
+                <input id="grid-cols" type="number" min="1" max="15" value="2" inputmode="numeric" />
+              </label>
+              <span class="grid-times" aria-hidden="true">×</span>
+              <label>
+                <span>行数</span>
+                <input id="grid-rows" type="number" min="1" max="15" value="2" inputmode="numeric" />
+              </label>
             </div>
+            <p class="field-hint">每项可输入 1–15，最多一次生成 225 张。</p>
           </section>
 
           <section class="control-section">
@@ -94,13 +98,13 @@
                 </span>
               </label>
             </div>
-            <div class="gap-control" id="gap-control" hidden>
+            <div class="gap-control" id="gap-control">
               <div class="range-heading">
-                <label for="gap-ratio">间隔 / 子图边长</label>
+                <label for="gap-ratio">实际渲染间隔 / 子图边长</label>
                 <output id="gap-output">58%</output>
               </div>
               <input id="gap-ratio" type="range" min="0" max="100" value="58" />
-              <p>默认值按你提供的 2×2 实际渲染截图估算，可实时微调。</p>
+              <p>最终组合预览始终显示该间隔；预裁剪模式还会按它跳过对应原图区域。</p>
             </div>
           </section>
 

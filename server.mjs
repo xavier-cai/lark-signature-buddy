@@ -17,8 +17,10 @@ const TLS_KEY_FILE = process.env.IMAGE_BUDDY_TLS_KEY || '';
 const ACCESS_TOKEN = process.env.IMAGE_BUDDY_ACCESS_TOKEN || randomBytes(24).toString('base64url');
 const TOKEN_HASH = createHash('sha256').update(ACCESS_TOKEN).digest();
 const WINDOW_MS = 60_000;
-const MAX_REQUESTS_PER_WINDOW = 20;
+const MAX_REQUESTS_PER_WINDOW = 300;
+const MAX_ACTIVE_UPLOADS = 8;
 const requestBuckets = new Map();
+let activeUploads = 0;
 
 function json(response, statusCode, body) {
   const payload = JSON.stringify(body);
@@ -241,6 +243,10 @@ async function handleRequest(request, response) {
       return;
     }
     if (request.method === 'POST' && requestUrl.pathname === '/api/upload') {
+      if (activeUploads >= MAX_ACTIVE_UPLOADS) {
+        json(response, 503, { ok: false, message: '上传任务繁忙，请稍后重试' });
+        return;
+      }
       const image = await readBody(request);
       const imageType = detectImage(image);
       if (!imageType) {
@@ -250,8 +256,13 @@ async function handleRequest(request, response) {
         });
         return;
       }
-      const imageKey = await uploadToLark(image);
-      json(response, 200, { ok: true, imageKey, imageType, size: image.length });
+      activeUploads += 1;
+      try {
+        const imageKey = await uploadToLark(image);
+        json(response, 200, { ok: true, imageKey, imageType, size: image.length });
+      } finally {
+        activeUploads -= 1;
+      }
       return;
     }
 

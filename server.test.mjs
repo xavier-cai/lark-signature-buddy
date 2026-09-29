@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { detectImage } from './server.mjs';
 import {
+  compositionUnits,
   fitCrop,
   parseGrid,
   selectionAspect,
@@ -25,7 +26,9 @@ test('rejects unknown binary content', () => {
 
 test('parses supported grids', () => {
   assert.deepEqual(parseGrid('2x3'), { cols: 2, rows: 3 });
-  assert.throws(() => parseGrid('4x4'), /Unsupported grid/);
+  assert.deepEqual(parseGrid('15x15'), { cols: 15, rows: 15 });
+  assert.throws(() => parseGrid('0x4'), /Unsupported grid/);
+  assert.throws(() => parseGrid('16x2'), /Unsupported grid/);
 });
 
 test('plain mode divides the selected area without gaps', () => {
@@ -55,10 +58,34 @@ test('precut mode reserves predictable gaps between square tiles', () => {
   assert.ok(Math.abs(tiles[2].y - (tile + gap)) < 1e-9);
 });
 
+test('supports the maximum 15x15 grid', () => {
+  const crop = { x: 0, y: 0, width: 1, height: 1 };
+  const tiles = tileRects(crop, 15, 15, 'precut', 0.58);
+  assert.equal(tiles.length, 225);
+  assert.deepEqual(
+    tiles.map(({ row, col }) => [row, col]).at(-1),
+    [14, 14],
+  );
+  const last = tiles.at(-1);
+  assert.ok(Math.abs(last.x + last.width - 1) < 1e-9);
+  assert.ok(Math.abs(last.y + last.height - 1) < 1e-9);
+});
+
 test('selection aspect includes reserved gap space', () => {
   assert.equal(selectionAspect(2, 3, 'plain', 0.58), 2 / 3);
   assert.equal(selectionAspect(2, 2, 'precut', 0.58), 1);
   assert.ok(selectionAspect(3, 2, 'precut', 0.58) > 1.5);
+});
+
+test('composition units always include actual renderer gaps', () => {
+  assert.deepEqual(compositionUnits(2, 2, 0.58), {
+    widthUnits: 2.58,
+    heightUnits: 2.58,
+  });
+  assert.deepEqual(compositionUnits(15, 1, 0.25), {
+    widthUnits: 18.5,
+    heightUnits: 1,
+  });
 });
 
 test('fit crop remains inside the source image', () => {

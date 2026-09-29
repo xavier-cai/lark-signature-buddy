@@ -17,7 +17,7 @@ const [template, css, gridCore, js] = await Promise.all([
 ]);
 
 const bundledScript = `${gridCore.replaceAll('export ', '')}\n${js.replace(
-  "import { fitCrop, parseGrid, selectionAspect, tileRects } from './grid-core.js';\n\n",
+  /import\s*\{[\s\S]*?\}\s*from\s*['"]\.\/grid-core\.js['"];\s*/,
   '',
 )}`;
 

@@ -1,4 +1,10 @@
-import { fitCrop, parseGrid, selectionAspect, tileRects } from './grid-core.js';
+import {
+  compositionUnits,
+  fitCrop,
+  parseGrid,
+  selectionAspect,
+  tileRects,
+} from './grid-core.js';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const HANDLE_RADIUS = 9;
@@ -19,7 +25,8 @@ const editorContext = editorCanvas.getContext('2d');
 const fileName = document.querySelector('#file-name');
 const fileDetail = document.querySelector('#file-detail');
 const resetGridButton = document.querySelector('#reset-grid');
-const gridOptions = document.querySelector('#grid-options');
+const gridColsInput = document.querySelector('#grid-cols');
+const gridRowsInput = document.querySelector('#grid-rows');
 const tileCount = document.querySelector('#tile-count');
 const modeOptions = document.querySelector('#mode-options');
 const gapControl = document.querySelector('#gap-control');
@@ -44,7 +51,6 @@ const state = {
   crop: null,
   display: null,
   drag: null,
-  previewCanvases: [],
   uploadedKeys: [],
 };
 
@@ -338,26 +344,28 @@ function sourceTileRects() {
 
 function renderTileCanvases(size = OUTPUT_SIZE) {
   if (!state.image || !state.crop) return [];
-  return sourceTileRects().map((tile) => {
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const context = canvas.getContext('2d');
-    context.imageSmoothingEnabled = true;
-    context.imageSmoothingQuality = 'high';
-    context.drawImage(
-      state.image,
-      tile.x,
-      tile.y,
-      tile.width,
-      tile.height,
-      0,
-      0,
-      size,
-      size,
-    );
-    return canvas;
-  });
+  return sourceTileRects().map((tile) => renderTileCanvas(tile, size));
+}
+
+function renderTileCanvas(tile, size = OUTPUT_SIZE) {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext('2d');
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(
+    state.image,
+    tile.x,
+    tile.y,
+    tile.width,
+    tile.height,
+    0,
+    0,
+    size,
+    size,
+  );
+  return canvas;
 }
 
 function renderOutputPreview() {
@@ -366,22 +374,40 @@ function renderOutputPreview() {
     return;
   }
   const { cols, rows } = currentGrid();
-  const canvases = renderTileCanvases(256);
-  const previewGrid = document.createElement('div');
-  previewGrid.className = 'preview-grid';
-  previewGrid.style.setProperty('--cols', cols);
-  previewGrid.style.setProperty('--rows', rows);
-  for (const canvas of canvases) previewGrid.append(canvas);
-  outputPreview.replaceChildren(previewGrid);
   const width = Math.min(outputPreview.clientWidth - 28, 240);
-  const gapRatio = state.mode === 'precut' ? state.gapRatio : 0;
-  const tileSize = width / (cols + Math.max(0, cols - 1) * gapRatio);
-  const gap = tileSize * gapRatio;
-  const height = rows * tileSize + Math.max(0, rows - 1) * gap;
-  previewGrid.style.width = `${width}px`;
-  previewGrid.style.height = `${height}px`;
-  previewGrid.style.gap = `${gap}px`;
-  state.previewCanvases = canvases;
+  const { widthUnits, heightUnits } = compositionUnits(cols, rows, state.gapRatio);
+  const tileSize = width / widthUnits;
+  const gap = tileSize * state.gapRatio;
+  const height = heightUnits * tileSize;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const preview = document.createElement('canvas');
+  preview.className = 'preview-composite';
+  preview.width = Math.round(width * dpr);
+  preview.height = Math.round(height * dpr);
+  preview.style.width = `${width}px`;
+  preview.style.height = `${height}px`;
+  const context = preview.getContext('2d');
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  context.clearRect(0, 0, width, height);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  const tiles = sourceTileRects();
+  for (const tile of tiles) {
+    const x = tile.col * (tileSize + gap);
+    const y = tile.row * (tileSize + gap);
+    context.drawImage(
+      state.image,
+      tile.x,
+      tile.y,
+      tile.width,
+      tile.height,
+      x,
+      y,
+      tileSize,
+      tileSize,
+    );
+  }
+  outputPreview.replaceChildren(preview);
 }
 
 function canvasToBlob(canvas) {
@@ -421,16 +447,26 @@ async function generateAndUpload() {
   spinner.hidden = false;
   results.hidden = true;
   setNotice();
-  const canvases = renderTileCanvases();
+  const tiles = sourceTileRects();
+  const uploaded = new Array(tiles.length);
+  let completed = 0;
 
   try {
-    const uploaded = [];
-    for (let index = 0; index < canvases.length; index += 1) {
-      generateLabel.textContent = `正在上传 ${index + 1} / ${canvases.length}`;
-      const blob = await canvasToBlob(canvases[index]);
-      const imageKey = await uploadBlob(blob, index);
-      uploaded.push({ canvas: canvases[index], blob, imageKey, index });
-    }
+    const workerCount = Math.min(4, tiles.length);
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < tiles.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const canvas = renderTileCanvas(tiles[index]);
+        const blob = await canvasToBlob(canvas);
+        const imageKey = await uploadBlob(blob, index);
+        uploaded[index] = { blob, imageKey, index };
+        completed += 1;
+        generateLabel.textContent = `正在上传 ${completed} / ${tiles.length}`;
+      }
+    };
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
     state.uploadedKeys = uploaded.map((item) => item.imageKey);
     renderResults(uploaded);
     setNotice(`已生成并上传 ${uploaded.length} 张图片`, 'success');
@@ -445,7 +481,7 @@ async function generateAndUpload() {
   } finally {
     spinner.hidden = true;
     generateButton.disabled = false;
-    generateLabel.textContent = `生成并上传 ${canvases.length} 张`;
+    generateLabel.textContent = `生成并上传 ${tiles.length} 张`;
   }
 }
 
@@ -494,20 +530,18 @@ async function copyText(text, button) {
   }, 1200);
 }
 
-function setGrid(value) {
-  state.grid = value;
-  gridOptions.querySelectorAll('button').forEach((button) => {
-    button.classList.toggle('selected', button.dataset.grid === value);
-  });
-  const { cols, rows } = currentGrid();
-  tileCount.textContent = `${cols * rows} 张`;
-  generateLabel.textContent = state.image ? `生成并上传 ${cols * rows} 张` : '选择图片后生成';
+function setGrid(cols, rows) {
+  state.grid = `${cols}x${rows}`;
+  const grid = currentGrid();
+  tileCount.textContent = `${grid.cols * grid.rows} 张`;
+  generateLabel.textContent = state.image
+    ? `生成并上传 ${grid.cols * grid.rows} 张`
+    : '选择图片后生成';
   if (state.image) resetCrop();
 }
 
 function setMode(value) {
   state.mode = value;
-  gapControl.hidden = value !== 'precut';
   if (state.image) resetCrop();
 }
 
@@ -520,10 +554,25 @@ copyAllButton.addEventListener('click', () =>
   copyText(state.uploadedKeys.join('\n'), copyAllButton),
 );
 
-gridOptions.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-grid]');
-  if (button) setGrid(button.dataset.grid);
-});
+function updateGridFromInputs({ commit = false } = {}) {
+  let cols = gridColsInput.valueAsNumber;
+  let rows = gridRowsInput.valueAsNumber;
+  if (commit) {
+    cols = Math.max(1, Math.min(15, Number.isFinite(cols) ? Math.round(cols) : 1));
+    rows = Math.max(1, Math.min(15, Number.isFinite(rows) ? Math.round(rows) : 1));
+    gridColsInput.value = String(cols);
+    gridRowsInput.value = String(rows);
+  }
+  if (!Number.isInteger(cols) || cols < 1 || cols > 15) return;
+  if (!Number.isInteger(rows) || rows < 1 || rows > 15) return;
+  setGrid(cols, rows);
+}
+
+for (const input of [gridColsInput, gridRowsInput]) {
+  input.addEventListener('input', () => updateGridFromInputs());
+  input.addEventListener('change', () => updateGridFromInputs({ commit: true }));
+  input.addEventListener('blur', () => updateGridFromInputs({ commit: true }));
+}
 
 modeOptions.addEventListener('change', (event) => {
   if (event.target.name === 'mode') setMode(event.target.value);
@@ -532,7 +581,13 @@ modeOptions.addEventListener('change', (event) => {
 gapRatioInput.addEventListener('input', () => {
   state.gapRatio = Number(gapRatioInput.value) / 100;
   gapOutput.textContent = `${gapRatioInput.value}%`;
-  if (state.image) resetCrop();
+  if (!state.image) return;
+  if (state.mode === 'precut') {
+    resetCrop();
+  } else {
+    drawEditor();
+    renderOutputPreview();
+  }
 });
 
 for (const target of [emptyStage, canvasStage]) {
