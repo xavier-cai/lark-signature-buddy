@@ -3,6 +3,10 @@ import { join } from 'node:path';
 
 import sharp from 'sharp';
 
+import {
+  decodeImageBytes,
+  encodeApngBytes,
+} from './public/animation-core.js';
 import { tileRects } from './public/grid-core.js';
 
 const MAX_TILES = 225;
@@ -91,12 +95,54 @@ export function buildTileSpecs(recipe, transportImage) {
 }
 
 export async function renderTile(input, spec, animation = {}) {
-  const pages = animation.pages || 1;
-  const delays = animation.delay?.length
-    ? animation.delay
-    : Array.from({ length: pages }, () => 100);
+  if (animation.pages > 1) {
+    if (animation.format !== 'apng') {
+      throw new Error('V3 动图切片只支持 APNG');
+    }
+    const decoded = animation.frames
+      ? animation
+      : await decodeImageBytes(input, 'image/apng');
+    const frames = await Promise.all(
+      decoded.frames.map(async (frame) => {
+        const data = await sharp(Buffer.from(frame.data), {
+          raw: {
+            width: decoded.width,
+            height: decoded.height,
+            channels: 4,
+          },
+          failOn: 'warning',
+        })
+          .extract({
+            left: spec.left,
+            top: spec.top,
+            width: spec.width,
+            height: spec.height,
+          })
+          .resize(spec.outputWidth, spec.outputHeight, {
+            fit: 'fill',
+            kernel: sharp.kernel.lanczos3,
+          })
+          .raw()
+          .toBuffer();
+        return {
+          data: new Uint8ClampedArray(
+            data.buffer,
+            data.byteOffset,
+            data.byteLength,
+          ),
+          delay: frame.delay,
+        };
+      }),
+    );
+    return Buffer.from(encodeApngBytes({
+      width: spec.outputWidth,
+      height: spec.outputHeight,
+      frames,
+      loop: decoded.loop,
+    }));
+  }
+
   const pipeline = sharp(input, {
-    animated: true,
     failOn: 'warning',
   })
     .extract({
@@ -109,17 +155,6 @@ export async function renderTile(input, spec, animation = {}) {
       fit: 'fill',
       kernel: sharp.kernel.lanczos3,
     });
-  if (animation.pages > 1) {
-    return pipeline.gif({
-      loop: animation.loop ?? 0,
-      delay: delays,
-      colours: 256,
-      effort: 4,
-      dither: 1,
-      keepDuplicateFrames: true,
-    })
-      .toBuffer();
-  }
   return pipeline.png().toBuffer();
 }
 
@@ -143,6 +178,12 @@ export async function generateAndUploadTiles({
   concurrency = DEFAULT_CONCURRENCY,
 }) {
   const specs = buildTileSpecs(recipe, transportImage);
+  const renderAnimation = transportImage.pages > 1
+    ? {
+      ...transportImage,
+      ...(await decodeImageBytes(input, 'image/apng')),
+    }
+    : transportImage;
   const directory = await mkdtemp('.image-buddy-tiles-');
   const imageKeys = new Array(specs.length);
   let cursor = 0;
@@ -155,13 +196,13 @@ export async function generateAndUploadTiles({
       cursor += 1;
       if (current >= specs.length) return;
       const spec = specs[current];
-      const extension = transportImage.pages > 1 ? 'gif' : 'png';
+      const extension = transportImage.pages > 1 ? 'apng' : 'png';
       const path = join(
         directory,
         `tile-${String(current + 1).padStart(3, '0')}.${extension}`,
       );
       try {
-        const buffer = await renderTile(input, spec, transportImage);
+        const buffer = await renderTile(input, spec, renderAnimation);
         if (buffer.length > 10 * 1024 * 1024) {
           throw new Error(
             `第 ${current + 1} 张 ${extension.toUpperCase()} 超过飞书 10 MB 上传上限`,

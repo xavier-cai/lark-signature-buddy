@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import QRCode from 'qrcode';
-import { decode, encode } from 'modern-gif';
 import sharp from 'sharp';
 import { readFile } from 'node:fs/promises';
 
 import { decodeRecipeFromImage } from './bot-image.mjs';
 import {
   decodeImageBytes,
-  encodeGifFrames,
+  encodeApngBytes,
+  encodeApngFrames,
 } from './public/animation-core.js';
 import { mapToLuminanceAlpha } from './public/color-mapping.js';
 import {
@@ -207,9 +207,9 @@ const recipe = createImageRecipe({
   },
 });
 
-test('round-trips the shared V2 image recipe', () => {
+test('round-trips the shared V3 image recipe', () => {
   const token = encodeImageRecipe(recipe);
-  assert.match(token, /^IB2:[A-Za-z0-9_-]+$/);
+  assert.match(token, /^IB3:[A-Za-z0-9_-]+$/);
   assert.ok(token.length <= 64);
   assert.deepEqual(decodeImageRecipe(token), recipe);
   assert.equal(recipe.output.format, 'png');
@@ -219,8 +219,8 @@ test('round-trips the shared V2 image recipe', () => {
 test('strictly rejects recipe version mismatches and extra fields', () => {
   const token = encodeImageRecipe(recipe);
   assert.throws(
-    () => decodeImageRecipe(token.replace('IB2:', 'IB3:')),
-    /仅支持 V2，收到 V3/,
+    () => decodeImageRecipe(token.replace('IB3:', 'IB2:')),
+    /仅支持 V3，收到 V2/,
   );
   const replacement = token.endsWith('A') ? 'B' : 'A';
   assert.throws(
@@ -393,7 +393,7 @@ test('uploads rendered tiles concurrently while preserving result order', async 
   assert.equal(calls.length, 6);
 });
 
-test('preserves animation frames, delays, and loop in generated GIF tiles', async () => {
+test('preserves animation frames, delays, loop, and alpha in APNG tiles', async () => {
   const animatedLayout = transportLayoutForSource(80, 100, compactQrSize);
   const animatedRecipe = createImageRecipe({
     sourceWidth: 80,
@@ -412,7 +412,7 @@ test('preserves animation frames, delays, and loop in generated GIF tiles', asyn
       height: animatedLayout.sourceHeight / animatedLayout.canvasHeight,
     },
   });
-  assert.equal(animatedRecipe.output.format, 'gif');
+  assert.equal(animatedRecipe.output.format, 'apng');
   assert.equal(animatedRecipe.source.animated, true);
   const qr = await QRCode.toBuffer(encodeImageRecipe(animatedRecipe), {
     type: 'png',
@@ -420,59 +420,54 @@ test('preserves animation frames, delays, and loop in generated GIF tiles', asyn
     margin: 4,
     errorCorrectionLevel: 'H',
   });
-  const pageBuffers = [];
-  for (const background of ['#ff0000', '#0000ff']) {
-    const source = await sharp({
+  const transportFrames = [];
+  for (const [red, blue, alpha] of [[255, 0, 64], [0, 255, 192]]) {
+    const source = Buffer.alloc(80 * 100 * 4);
+    for (let index = 0; index < source.length; index += 4) {
+      source[index] = red;
+      source[index + 2] = blue;
+      source[index + 3] = alpha;
+    }
+    const canvas = await sharp({
       create: {
-        width: 80,
-        height: 100,
+        width: animatedLayout.canvasWidth,
+        height: animatedLayout.canvasHeight,
         channels: 4,
-        background,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
       },
     })
-      .png()
-      .toBuffer();
-    pageBuffers.push(
-      await sharp({
-        create: {
-          width: animatedLayout.canvasWidth,
-          height: animatedLayout.canvasHeight,
-          channels: 4,
-          background: '#ffffff',
+      .composite([
+        {
+          input: source,
+          raw: { width: 80, height: 100, channels: 4 },
+          left: animatedLayout.sourceX,
+          top: animatedLayout.sourceY,
         },
-      })
-        .composite([
-          {
-            input: source,
-            left: animatedLayout.sourceX,
-            top: animatedLayout.sourceY,
-          },
-          {
-            input: qr,
-            left: Math.round(
-              (animatedLayout.canvasWidth - animatedLayout.qrSize) / 2,
-            ),
-            top: animatedLayout.sourceHeight,
-          },
-        ])
-        .raw()
-        .toBuffer(),
-    );
+        {
+          input: qr,
+          left: Math.round(
+            (animatedLayout.canvasWidth - animatedLayout.qrSize) / 2,
+          ),
+          top: animatedLayout.sourceHeight,
+        },
+      ])
+      .raw()
+      .toBuffer();
+    transportFrames.push(new Uint8ClampedArray(
+      canvas.buffer,
+      canvas.byteOffset,
+      canvas.byteLength,
+    ));
   }
-  const transport = await sharp(Buffer.concat(pageBuffers), {
-    raw: {
-      width: animatedLayout.canvasWidth,
-      height: animatedLayout.canvasHeight * 2,
-      channels: 4,
-      pageHeight: animatedLayout.canvasHeight,
-    },
-  })
-    .gif({
-      loop: 0,
-      delay: [100, 200],
-      keepDuplicateFrames: true,
-    })
-    .toBuffer();
+  const transport = Buffer.from(encodeApngBytes({
+    width: animatedLayout.canvasWidth,
+    height: animatedLayout.canvasHeight,
+    frames: [
+      { data: transportFrames[0], delay: 100 },
+      { data: transportFrames[1], delay: 200 },
+    ],
+    loop: 0,
+  }));
   const decoded = await decodeRecipeFromImage(transport);
   assert.deepEqual(decoded.recipe, animatedRecipe);
   assert.equal(decoded.image.pages, 2);
@@ -484,17 +479,19 @@ test('preserves animation frames, delays, and loop in generated GIF tiles', asyn
     buildTileSpecs(decoded.recipe, decoded.image)[0],
     decoded.image,
   );
-  const metadata = await sharp(tile, { animated: true }).metadata();
-  assert.equal(metadata.format, 'gif');
-  assert.equal(metadata.pages, 2);
-  assert.equal(metadata.pageHeight, 512);
-  assert.deepEqual(metadata.delay, [100, 200]);
-  assert.equal(metadata.loop, 0);
+  const decodedTile = await decodeImageBytes(tile, 'image/apng');
+  assert.equal(decodedTile.width, 512);
+  assert.equal(decodedTile.height, 512);
+  assert.equal(decodedTile.frames.length, 2);
+  assert.deepEqual(decodedTile.frames.map((frame) => frame.delay), [100, 200]);
+  assert.equal(decodedTile.loop, 0);
+  assert.ok(decodedTile.frames[0].data.some((value, index) =>
+    index % 4 === 3 && value > 0 && value < 255));
 });
 
-test('browser GIF codec preserves frame count, delays, and loop', async () => {
-  const width = 3;
-  const height = 2;
+test('browser APNG codec preserves RGBA, frame count, delays, and loop', async () => {
+  const width = 16;
+  const height = 12;
   const red = new Uint8ClampedArray(width * height * 4);
   const blue = new Uint8ClampedArray(width * height * 4);
   for (let index = 0; index < red.length; index += 4) {
@@ -503,7 +500,8 @@ test('browser GIF codec preserves frame count, delays, and loop', async () => {
     blue[index + 2] = 255;
     blue[index + 3] = 255;
   }
-  const blob = await encodeGifFrames({
+  red[3] = 128;
+  const blob = await encodeApngFrames({
     width,
     height,
     frames: [
@@ -513,42 +511,14 @@ test('browser GIF codec preserves frame count, delays, and loop', async () => {
     loop: 0,
   });
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  const decoded = await decodeImageBytes(bytes, 'image/gif');
+  const decoded = await decodeImageBytes(bytes, 'image/apng');
   assert.equal(decoded.frames.length, 2);
   assert.deepEqual(
     decoded.frames.map((frame) => frame.delay),
     [80, 160],
   );
   assert.equal(decoded.loop, 0);
-  assert.equal(decode(bytes).frames.length, 2);
-});
-
-test('browser GIF codec dithers mapped alpha to GIF transparency', async () => {
-  const mapped = mapToLuminanceAlpha(
-    new Uint8ClampedArray([
-      255, 255, 255, 255,
-      0, 0, 0, 255,
-    ]),
-  );
-  const blob = await encodeGifFrames({
-    width: 2,
-    height: 1,
-    frames: [
-      { data: mapped, delay: 100 },
-      { data: mapped, delay: 100 },
-    ],
-    loop: 0,
-    ditherTransparency: 'floyd-steinberg',
-  });
-  const decoded = await decodeImageBytes(
-    new Uint8Array(await blob.arrayBuffer()),
-    'image/gif',
-  );
-  assert.equal(decoded.frames.length, 2);
-  assert.deepEqual(
-    Array.from(decoded.frames[0].data).filter((_, index) => index % 4 === 3),
-    [0, 255],
-  );
+  assert.equal(decoded.frames[0].data[3], 128);
 });
 
 test('browser APNG decoder preserves all frames and delays', async () => {
@@ -564,20 +534,23 @@ test('browser APNG decoder preserves all frames and delays', async () => {
   assert.equal(decoded.loop, 0);
 });
 
-test('browser APNG frames can be normalized into a multi-frame GIF', async () => {
+test('browser APNG frames can be normalized into a multi-frame APNG', async () => {
   const bytes = await readFile('./test-fixtures/animated-apng.png');
   const decoded = await decodeImageBytes(bytes, 'image/apng');
-  const blob = await encodeGifFrames(decoded);
-  const gif = decode(new Uint8Array(await blob.arrayBuffer()));
-  assert.equal(gif.frames.length, 2);
+  const blob = await encodeApngFrames(decoded);
+  const apng = await decodeImageBytes(
+    new Uint8Array(await blob.arrayBuffer()),
+    'image/apng',
+  );
+  assert.equal(apng.frames.length, 2);
   assert.deepEqual(
-    gif.frames.map((frame) => frame.delay),
+    apng.frames.map((frame) => frame.delay),
     [80, 160],
   );
-  assert.equal(gif.loopCount, 0);
+  assert.equal(apng.loop, 0);
 });
 
-test('rejects transport canvases beyond the V2 resource limits', () => {
+test('rejects transport canvases beyond the V3 resource limits', () => {
   assert.throws(() => transportLayoutForSource(8192, 8192, 147), /32 MP/);
   assert.throws(() => transportLayoutForSource(9000, 10, 147), /8192 px/);
   assert.throws(() => validateStaticImageSize(8192, 8192), /32 MP/);

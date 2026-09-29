@@ -1,4 +1,4 @@
-import { decode as decodeGif, decodeFrames, encode as encodeGif } from 'modern-gif';
+import { decode as decodeGif, decodeFrames } from 'modern-gif';
 import UPNG from 'upng-js';
 
 import {
@@ -118,28 +118,64 @@ export async function decodeImageFrames(file) {
   return decodeStaticImage(file);
 }
 
-export async function encodeGifFrames({
+function setApngLoop(bytes, loop) {
+  for (let index = 8; index + 20 <= bytes.length; ) {
+    const length =
+      ((bytes[index] << 24) |
+        (bytes[index + 1] << 16) |
+        (bytes[index + 2] << 8) |
+        bytes[index + 3]) >>>
+      0;
+    if (
+      length === 8 &&
+      String.fromCharCode(...bytes.subarray(index + 4, index + 8)) === 'acTL'
+    ) {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      view.setUint32(index + 12, loop);
+      view.setUint32(
+        index + 16,
+        UPNG.crc.crc(bytes, index + 4, length + 4),
+      );
+      return bytes;
+    }
+    index += 12 + length;
+  }
+  return bytes;
+}
+
+export function encodeApngBytes({
   width,
   height,
   frames,
   loop = 0,
-  ditherTransparency,
 }) {
   validateAnimationWork(width, height, frames.length);
-  const output = await encodeGif({
+  const output = new Uint8Array(UPNG.encode(
+    frames.map((frame) =>
+      frame.data.buffer.slice(
+        frame.data.byteOffset,
+        frame.data.byteOffset + frame.data.byteLength,
+      )),
     width,
     height,
-    looped: true,
-    loopCount: loop,
-    frames: frames.map((frame) => ({
-      data: frame.data,
-      delay: clampDelay(frame.delay),
-    })),
-    maxColors: 255,
-    dither: 'floyd-steinberg',
-    ditherTransparency,
-  });
-  return new Blob([output], { type: 'image/gif' });
+    0,
+    frames.map((frame) => clampDelay(frame.delay)),
+  ));
+  setApngLoop(output, loop);
+  const encoded = UPNG.decode(
+    output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength),
+  );
+  if (encoded.frames.length !== frames.length) {
+    throw new Error(
+      `APNG 编码帧数异常：期望 ${frames.length} 帧，实际 ${encoded.frames.length} 帧`,
+    );
+  }
+  return output;
+}
+
+export async function encodeApngFrames(animation) {
+  const output = encodeApngBytes(animation);
+  return new Blob([output], { type: 'image/png' });
 }
 
 export function frameToCanvas(frame, width, height) {

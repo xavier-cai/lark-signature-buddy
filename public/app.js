@@ -12,7 +12,7 @@ import {
 } from './grid-core.js';
 import {
   decodeImageFrames,
-  encodeGifFrames,
+  encodeApngFrames,
   frameToCanvas,
 } from './animation-core.js';
 import { mapToLuminanceAlpha } from './color-mapping.js';
@@ -88,7 +88,7 @@ function updateCopyLabel() {
   }
   const mappingLabel = state.colorMapping ? '色彩映射' : '原始色彩';
   generateLabel.textContent = state.animation?.frames.length > 1
-    ? `生成并复制 ${mappingLabel} GIF 动图`
+    ? `生成并复制 ${mappingLabel} APNG 动图`
     : `生成并复制 ${mappingLabel} PNG 图片`;
 }
 
@@ -732,12 +732,11 @@ async function buildTransportImage() {
       );
     });
   } else {
-    blob = await encodeGifFrames({
+    blob = await encodeApngFrames({
       width: layout.canvasWidth,
       height: layout.canvasHeight,
       frames,
       loop: state.animation.loop,
-      ditherTransparency: state.colorMapping ? 'floyd-steinberg' : undefined,
     });
   }
   if (blob.size > 20 * 1024 * 1024) {
@@ -780,7 +779,7 @@ async function copyImageRecipe() {
     state.transportUrl = previewUrl;
     transportPreview.src = previewUrl;
     transportDownload.href = previewUrl;
-    const extension = blob.type === 'image/gif' ? 'gif' : 'png';
+    const extension = isAnimated() ? 'apng' : 'png';
     transportDownload.download = `image-buddy-transport.${extension}`;
     transportDetail.textContent =
       `${layout.canvasWidth} × ${layout.canvasHeight} · ${state.animation.frames.length} 帧 · ${state.colorMapping ? '色彩映射' : '原始色彩'} · ${recipeToken.length} 字符`;

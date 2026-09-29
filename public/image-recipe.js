@@ -1,5 +1,5 @@
 export const IMAGE_RECIPE_NAME = 'image-buddy-recipe';
-export const IMAGE_RECIPE_VERSION = 2;
+export const IMAGE_RECIPE_VERSION = 3;
 export const IMAGE_RECIPE_PREFIX = `IB${IMAGE_RECIPE_VERSION}:`;
 export const IMAGE_RECIPE_BYTE_LENGTH = 41;
 export const IMAGE_RECIPE_TOKEN_MAX_LENGTH = 64;
@@ -10,7 +10,7 @@ const MODE_TO_CODE = new Map([
 ]);
 const FORMAT_TO_CODE = new Map([
   ['png', 0],
-  ['gif', 1],
+  ['apng', 1],
 ]);
 const NORMALIZED_MAX = 65535;
 
@@ -137,12 +137,12 @@ export function validateImageRecipe(value) {
   assertExactKeys(value.output, ['width', 'height', 'format'], 'output');
   assertInteger(value.output.width, 1, 4096, 'output.width');
   assertInteger(value.output.height, 1, 4096, 'output.height');
-  if (value.output.width !== value.output.height) fail('V2 仅支持正方形输出');
+  if (value.output.width !== value.output.height) fail('V3 仅支持正方形输出');
   if (!FORMAT_TO_CODE.has(value.output.format)) {
-    fail('output.format 必须是 png 或 gif');
+    fail('output.format 必须是 png 或 apng');
   }
-  if (value.source.animated !== (value.output.format === 'gif')) {
-    fail('静态输入必须输出 png，动图输入必须输出 gif');
+  if (value.source.animated !== (value.output.format === 'apng')) {
+    fail('静态输入必须输出 png，动图输入必须输出 apng');
   }
   assertExactKeys(value.transport, ['contentRect'], 'transport');
   assertRect(value.transport.contentRect, 'transport.contentRect');
@@ -182,7 +182,7 @@ export function createImageRecipe({
     output: {
       width: outputSize,
       height: outputSize,
-      format: sourceFrames > 1 ? 'gif' : 'png',
+      format: sourceFrames > 1 ? 'apng' : 'png',
     },
     transport: {
       contentRect: {

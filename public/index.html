@@ -15,7 +15,7 @@
           <div>
             <p class="eyebrow">IMAGE BUDDY</p>
             <h1>网格切图与图片仔</h1>
-            <p class="intro">同屏调整选区、网格和间隔预裁剪；静态图输出 PNG，动图统一输出 GIF。</p>
+            <p class="intro">同屏调整选区、网格和间隔预裁剪；静态图输出 PNG，动图统一输出 APNG。</p>
           </div>
         </div>
         <button class="upload-button" id="upload-button" type="button">
@@ -111,7 +111,7 @@
               </label>
             </div>
             <p class="mapping-warning" id="mapping-warning" hidden>
-              GIF 不支持半透明，输出时会用透明度抖动近似映射效果。
+              APNG 会保留全部帧与 8-bit 半透明色彩映射效果。
             </p>
           </section>
 
@@ -182,7 +182,7 @@
 
       <footer>
         <span class="status-dot"></span>
-        <span>二维码仅保留机器识别所需尺寸；动图保留全部帧并统一输出 GIF。</span>
+        <span>二维码仅保留机器识别所需尺寸；动图保留全部帧、帧时长与半透明并统一输出 APNG。</span>
       </footer>
     </main>
 
