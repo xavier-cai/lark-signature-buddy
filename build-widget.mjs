@@ -4,17 +4,19 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
-const [template, css, gridCore, js] = await Promise.all([
+const [template, css, imageRecipe, gridCore, js] = await Promise.all([
   readFile(join(ROOT, 'public', 'index.html'), 'utf8'),
   readFile(join(ROOT, 'public', 'styles.css'), 'utf8'),
+  readFile(join(ROOT, 'public', 'image-recipe.js'), 'utf8'),
   readFile(join(ROOT, 'public', 'grid-core.js'), 'utf8'),
   readFile(join(ROOT, 'public', 'app.js'), 'utf8'),
 ]);
 
-const bundledScript = `${gridCore.replaceAll('export ', '')}\n${js.replace(
-  /import\s*\{[\s\S]*?\}\s*from\s*['"]\.\/grid-core\.js['"];\s*/,
-  '',
-)}`;
+const bundledScript = [
+  imageRecipe.replaceAll('export ', ''),
+  gridCore.replaceAll('export ', ''),
+  js.replace(/import\s*\{[\s\S]*?\}\s*from\s*['"]\.\/(?:image-recipe|grid-core)\.js['"];\s*/g, ''),
+].join('\n');
 
 const output = template
   .replace(

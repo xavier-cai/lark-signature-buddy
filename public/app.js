@@ -1,4 +1,8 @@
 import {
+  createImageRecipe,
+  encodeImageRecipe,
+} from './image-recipe.js';
+import {
   compositionUnits,
   fitCrop,
   parseGrid,
@@ -32,15 +36,6 @@ const notice = document.querySelector('#notice');
 const generateButton = document.querySelector('#generate-button');
 const generateLabel = document.querySelector('#generate-label');
 const spinner = document.querySelector('#spinner');
-const copyDialog = document.querySelector('#copy-dialog');
-const copyDialogBackdrop = document.querySelector('#copy-dialog-backdrop');
-const copyDialogClose = document.querySelector('#copy-dialog-close');
-const copyDialogImage = document.querySelector('#copy-dialog-image');
-const copyDialogIndex = document.querySelector('#copy-dialog-index');
-const copyDialogPrev = document.querySelector('#copy-dialog-prev');
-const copyDialogDownload = document.querySelector('#copy-dialog-download');
-const copyDialogCopy = document.querySelector('#copy-dialog-copy');
-const copyDialogNext = document.querySelector('#copy-dialog-next');
 
 const state = {
   file: null,
@@ -52,21 +47,14 @@ const state = {
   crop: null,
   display: null,
   drag: null,
-  generated: [],
-  copyIndex: 0,
 };
-
-function tileTotal() {
-  const { cols, rows } = currentGrid();
-  return cols * rows;
-}
 
 function updateCopyLabel() {
   if (!state.image) {
-    generateLabel.textContent = '选择图片后即可复制';
+    generateLabel.textContent = '选择图片后即可复制原图 + 参数';
     return;
   }
-  generateLabel.textContent = `复制第 ${state.copyIndex + 1}/${tileTotal()} 张`;
+  generateLabel.textContent = '复制原图 + 切图参数';
 }
 
 function formatBytes(size) {
@@ -125,7 +113,6 @@ function chooseFile(file) {
   const imageUrl = URL.createObjectURL(file);
   const image = new Image();
   image.onload = () => {
-    clearGenerated();
     state.file = file;
     state.image = image;
     state.imageUrl = imageUrl;
@@ -136,7 +123,6 @@ function chooseFile(file) {
     canvasStage.hidden = false;
     resetGridButton.disabled = false;
     generateButton.disabled = false;
-    state.copyIndex = 0;
     updateCopyLabel();
     resetCrop();
   };
@@ -358,32 +344,6 @@ function sourceTileRects() {
   }));
 }
 
-function renderTileCanvases(size = OUTPUT_SIZE) {
-  if (!state.image || !state.crop) return [];
-  return sourceTileRects().map((tile) => renderTileCanvas(tile, size));
-}
-
-function renderTileCanvas(tile, size = OUTPUT_SIZE) {
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const context = canvas.getContext('2d');
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = 'high';
-  context.drawImage(
-    state.image,
-    tile.x,
-    tile.y,
-    tile.width,
-    tile.height,
-    0,
-    0,
-    size,
-    size,
-  );
-  return canvas;
-}
-
 function renderOutputPreview() {
   if (!state.image) {
     outputPreview.innerHTML = '<span>选择图片后显示</span>';
@@ -426,96 +386,32 @@ function renderOutputPreview() {
   outputPreview.replaceChildren(preview);
 }
 
-function canvasToBlob(canvas) {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => (blob ? resolve(blob) : reject(new Error('无法生成 PNG'))),
-      'image/png',
-    );
-  });
-}
-
-function canvasToBlobFromDataUrl(dataUrl) {
-  const [metadata, encoded] = dataUrl.split(',');
-  const mime = /data:([^;]+)/.exec(metadata)?.[1] || 'image/png';
-  const bytes = atob(encoded);
-  const buffer = new Uint8Array(bytes.length);
-  for (let index = 0; index < bytes.length; index += 1) {
-    buffer[index] = bytes.charCodeAt(index);
-  }
-  return new Blob([buffer], { type: mime });
-}
-
-function clearGenerated() {
-  for (const item of state.generated) {
-    if (item.objectUrl) URL.revokeObjectURL(item.objectUrl);
-  }
-  state.generated = [];
-  closeCopyDialog();
-}
-
-function resetCopyQueue() {
-  state.copyIndex = 0;
-  clearGenerated();
-  updateCopyLabel();
-}
-
-function prepareCurrentTile() {
-  const tiles = sourceTileRects();
-  const index = Math.max(0, Math.min(tiles.length - 1, state.copyIndex));
-  const canvas = renderTileCanvas(tiles[index]);
-  const dataUrl = canvas.toDataURL('image/png');
-  const blob = canvasToBlobFromDataUrl(dataUrl);
-  return {
-    blob,
-    index,
-    objectUrl: URL.createObjectURL(blob),
-    dataUrl,
-  };
-}
-
-async function copyNextTile() {
-  if (!state.image || generateButton.disabled) return;
-  generateButton.disabled = true;
-  setNotice();
-  const total = tileTotal();
-  try {
-    clearGenerated();
-    const item = prepareCurrentTile();
-    state.generated = [item];
-    if (!legacyCopyImages([item])) {
-      openCopyDialog(0);
-      setNotice(`第 ${state.copyIndex + 1}/${total} 张已准备，请在弹窗中手动复制`);
-      return;
-    }
-    const copiedNumber = state.copyIndex + 1;
-    state.copyIndex = (state.copyIndex + 1) % total;
-    setNotice(
-      copiedNumber === total
-        ? `第 ${copiedNumber}/${total} 张已复制；本轮完成，可直接粘贴给图片仔`
-        : `第 ${copiedNumber}/${total} 张已复制；粘贴后继续复制下一张`,
-      'success',
-    );
-  } catch (error) {
-    setNotice(error.message || '复制失败，请稍后重试。');
-  } finally {
-    spinner.hidden = true;
-    generateButton.disabled = false;
-    updateCopyLabel();
-  }
-}
-
-async function blobToDataUrl(blob) {
+function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error || new Error('读取图片失败'));
-    reader.readAsDataURL(blob);
+    reader.onerror = () => reject(reader.error || new Error('读取原图失败'));
+    reader.readAsDataURL(file);
   });
 }
 
-function legacyCopyImages(items) {
-  if (items.some((item) => !item.dataUrl)) return false;
+function currentRecipeToken() {
+  const { cols, rows } = currentGrid();
+  return encodeImageRecipe(
+    createImageRecipe({
+      sourceWidth: state.image.naturalWidth,
+      sourceHeight: state.image.naturalHeight,
+      cols,
+      rows,
+      crop: state.crop,
+      mode: state.mode,
+      gapRatio: state.gapRatio,
+      outputSize: OUTPUT_SIZE,
+    }),
+  );
+}
+
+function legacyCopyPackage(imageDataUrl, recipeToken) {
   const container = document.createElement('div');
   container.contentEditable = 'true';
   container.setAttribute('aria-hidden', 'true');
@@ -526,12 +422,12 @@ function legacyCopyImages(items) {
     opacity: '0.01',
     pointerEvents: 'none',
   });
-  items.forEach((item) => {
-    const image = document.createElement('img');
-    image.src = item.dataUrl;
-    image.alt = `tile-${item.index + 1}.png`;
-    container.append(image);
-  });
+  const image = document.createElement('img');
+  image.src = imageDataUrl;
+  image.alt = 'image-buddy-source';
+  const metadata = document.createElement('p');
+  metadata.textContent = recipeToken;
+  container.append(image, metadata);
   document.body.append(container);
   const selection = window.getSelection();
   const range = document.createRange();
@@ -544,72 +440,58 @@ function legacyCopyImages(items) {
   return copied;
 }
 
-async function copyImage(item, button) {
-  const original = button.textContent;
+async function asyncCopyPackage(imageDataUrl, recipeToken) {
+  if (!navigator.clipboard?.write || !window.ClipboardItem) return false;
+  const html = [
+    '<div>',
+    `<img src="${imageDataUrl}" alt="image-buddy-source">`,
+    `<p>${recipeToken}</p>`,
+    '</div>',
+  ].join('');
   try {
-    if (legacyCopyImages([item])) {
-      button.textContent = '已复制';
-      setNotice(`子图 ${item.index + 1} 已复制，可直接粘贴给图片仔`, 'success');
-      return;
-    }
-    if (navigator.clipboard?.write && window.ClipboardItem) {
-      try {
-        await navigator.clipboard.write([
-          new ClipboardItem({ 'image/png': item.blob }),
-        ]);
-        button.textContent = '已复制';
-        setNotice(`子图 ${item.index + 1} 已复制，可直接粘贴给图片仔`, 'success');
-        return;
-      } catch {
-        // Feishu HTML5 blocks often deny async clipboard access; use manual copy next.
-      }
-    }
-    throw new Error('Clipboard unavailable');
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'text/html': new Blob([html], { type: 'text/html' }),
+        'text/plain': new Blob([recipeToken], { type: 'text/plain' }),
+      }),
+    ]);
+    return true;
   } catch {
-    button.textContent = '手动复制';
-    openCopyDialog(item.index);
-    setNotice('iframe 未授权自动复制，已打开手动复制视图');
-  } finally {
-    window.setTimeout(() => {
-      button.textContent = original;
-    }, 1400);
+    return false;
   }
 }
 
-
-function openCopyDialog(index) {
-  if (state.generated.length === 0) return;
-  state.copyIndex = Math.max(0, Math.min(state.generated.length - 1, index));
-  const item = state.generated[state.copyIndex];
-  copyDialogImage.src = item.objectUrl;
-  copyDialogIndex.textContent = `第 ${state.copyIndex + 1} 张 / 共 ${state.generated.length} 张`;
-  copyDialogPrev.disabled = state.copyIndex === 0;
-  copyDialogNext.disabled = state.copyIndex === state.generated.length - 1;
-  copyDialog.hidden = false;
-}
-
-function closeCopyDialog() {
-  copyDialog.hidden = true;
-}
-
-function downloadCurrentImage() {
-  const item = state.generated[state.copyIndex];
-  if (!item) return;
-  const anchor = document.createElement('a');
-  anchor.href = item.objectUrl;
-  anchor.download = `image-buddy-${state.copyIndex + 1}.png`;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
+async function copyImageRecipe() {
+  if (!state.image || !state.file || !state.crop || generateButton.disabled) return;
+  generateButton.disabled = true;
+  spinner.hidden = false;
+  setNotice();
+  try {
+    const [imageDataUrl, recipeToken] = await Promise.all([
+      fileToDataUrl(state.file),
+      Promise.resolve(currentRecipeToken()),
+    ]);
+    const copied =
+      legacyCopyPackage(imageDataUrl, recipeToken) ||
+      (await asyncCopyPackage(imageDataUrl, recipeToken));
+    if (!copied) {
+      throw new Error('当前飞书文档不允许复制图文内容');
+    }
+    setNotice('已复制原图和切图参数，请粘贴发送给图片仔验证', 'success');
+  } catch (error) {
+    setNotice(error.message || '复制失败，请稍后重试。');
+  } finally {
+    spinner.hidden = true;
+    generateButton.disabled = false;
+    updateCopyLabel();
+  }
 }
 
 function setGrid(cols, rows) {
   state.grid = `${cols}x${rows}`;
   const grid = currentGrid();
   tileCount.textContent = `${grid.cols * grid.rows} 张`;
-  generateLabel.textContent = state.image
-    ? `复制 ${grid.cols * grid.rows} 张切图`
-    : '选择图片后即可复制';
+  updateCopyLabel();
   if (state.image) resetCrop();
 }
 
@@ -622,17 +504,7 @@ uploadButton.addEventListener('click', () => fileInput.click());
 emptyStage.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => chooseFile(fileInput.files?.[0]));
 resetGridButton.addEventListener('click', resetCrop);
-generateButton.addEventListener('click', generateTiles);
-copyAllButton.addEventListener('click', copyAllImages);
-openCopyQueueButton.addEventListener('click', () => openCopyDialog(0));
-copyDialogBackdrop.addEventListener('click', closeCopyDialog);
-copyDialogClose.addEventListener('click', closeCopyDialog);
-copyDialogPrev.addEventListener('click', () => openCopyDialog(state.copyIndex - 1));
-copyDialogNext.addEventListener('click', () => openCopyDialog(state.copyIndex + 1));
-copyDialogDownload.addEventListener('click', downloadCurrentImage);
-copyDialogCopy.addEventListener('click', () =>
-  copyImage(state.generated[state.copyIndex], copyDialogCopy),
-);
+generateButton.addEventListener('click', copyImageRecipe);
 
 function updateGridFromInputs({ commit = false } = {}) {
   let cols = gridColsInput.valueAsNumber;
@@ -720,11 +592,4 @@ window.addEventListener('paste', (event) => {
 
 window.addEventListener('resize', () => {
   if (state.image) drawEditor();
-});
-
-window.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !copyDialog.hidden) closeCopyDialog();
-  if (copyDialog.hidden) return;
-  if (event.key === 'ArrowLeft') openCopyDialog(state.copyIndex - 1);
-  if (event.key === 'ArrowRight') openCopyDialog(state.copyIndex + 1);
 });

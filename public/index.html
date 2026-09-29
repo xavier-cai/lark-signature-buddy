@@ -15,7 +15,7 @@
           <div>
             <p class="eyebrow">IMAGE BUDDY</p>
             <h1>网格切图与图片仔</h1>
-            <p class="intro">同屏调整选区、网格和间隔预裁剪，生成后复制图片并粘贴给图片仔。</p>
+            <p class="intro">同屏调整选区、网格和间隔预裁剪，一次复制原图与切图参数并粘贴给图片仔。</p>
           </div>
         </div>
         <button class="upload-button" id="upload-button" type="button">
@@ -122,41 +122,15 @@
 
           <div class="notice" id="notice" role="status" aria-live="polite"></div>
           <button class="generate-button" id="generate-button" type="button" disabled>
-            <span id="generate-label">选择图片后即可复制</span>
+            <span id="generate-label">选择图片后即可复制原图 + 参数</span>
             <span class="spinner" id="spinner" hidden aria-hidden="true"></span>
           </button>
         </aside>
       </section>
 
-      <div class="copy-dialog" id="copy-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="copy-dialog-title">
-        <button class="copy-dialog-backdrop" id="copy-dialog-backdrop" type="button" aria-label="关闭复制窗口"></button>
-        <section class="copy-dialog-card">
-          <header class="copy-dialog-header">
-            <div>
-              <p class="eyebrow">COPY QUEUE</p>
-              <h2 id="copy-dialog-title">复制切图</h2>
-            </div>
-            <button class="dialog-close" id="copy-dialog-close" type="button" aria-label="关闭">×</button>
-          </header>
-          <div class="copy-dialog-preview">
-            <img id="copy-dialog-image" alt="当前待复制切图" />
-          </div>
-          <div class="copy-dialog-meta">
-            <strong id="copy-dialog-index">第 1 张 / 共 1 张</strong>
-            <span>若自动复制失败，可右键或长按上方图片，选择“复制图片”，再点下一张。</span>
-          </div>
-          <div class="copy-dialog-actions">
-            <button class="secondary-action" id="copy-dialog-prev" type="button">上一张</button>
-            <button class="secondary-action" id="copy-dialog-download" type="button">下载当前图片</button>
-            <button class="primary-copy-action" id="copy-dialog-copy" type="button">复制当前图片</button>
-            <button class="secondary-action" id="copy-dialog-next" type="button">下一张</button>
-          </div>
-        </section>
-      </div>
-
       <footer>
         <span class="status-dot"></span>
-        <span>切图在浏览器内完成；复制后直接粘贴发送给图片仔 Bot。</span>
+        <span>选区参数在浏览器内生成；复制原图和参数后直接粘贴发送给图片仔 Bot。</span>
       </footer>
     </main>
 

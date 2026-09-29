@@ -3,7 +3,12 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import process from 'node:process';
 
-import { eventBatchKey, extractImageKeys, formatReply } from './bot-core.mjs';
+import {
+  eventBatchKey,
+  extractImageKeys,
+  extractImageRecipe,
+  formatRecipeReceipt,
+} from './bot-core.mjs';
 
 const PROFILE = process.env.IMAGE_BUDDY_PROFILE || 'image-buddy';
 const DEBOUNCE_MS = Number.parseInt(process.env.IMAGE_BUDDY_BATCH_DELAY_MS || '1500', 10);
@@ -57,10 +62,19 @@ async function replyToBatch(batchKey) {
   if (!batch) return;
   clearTimeout(batch.timer);
   batches.delete(batchKey);
-  if (batch.imageKeys.length === 0) return;
-
   const keys = [...new Set(batch.imageKeys)];
-  const text = formatReply(keys);
+  let text;
+  if (batch.errors.length > 0) {
+    text = `切图请求读取失败：${batch.errors[0]}`;
+  } else if (batch.recipes.length > 1) {
+    text = `切图请求无效：期望 1 份 recipe，收到 ${batch.recipes.length} 份。`;
+  } else if (batch.recipes.length === 1) {
+    text = formatRecipeReceipt(keys, batch.recipes[0]);
+  } else if (keys.length > 0) {
+    text = '切图请求无效：未读取到 IMAGE_BUDDY_RECIPE_V1 参数。';
+  } else {
+    return;
+  }
   try {
     await runLark([
       'im',
@@ -80,6 +94,7 @@ async function replyToBatch(batchKey) {
     log('info', 'replied with image keys', {
       messageId: batch.replyMessageId,
       imageCount: keys.length,
+      recipeCount: batch.recipes.length,
     });
   } catch (error) {
     log('error', 'failed to reply with image keys', {
@@ -89,18 +104,22 @@ async function replyToBatch(batchKey) {
   }
 }
 
-function scheduleBatch(event, imageKeys) {
+function scheduleBatch(event, { imageKeys = [], recipe = null, error = null }) {
   const key = eventBatchKey(event);
   const now = Date.now();
   const existing = batches.get(key);
   const batch = existing || {
     imageKeys: [],
+    recipes: [],
+    errors: [],
     messageIds: [],
     replyMessageId: event.message_id,
     firstAt: now,
     timer: null,
   };
   batch.imageKeys.push(...imageKeys);
+  if (recipe) batch.recipes.push(recipe);
+  if (error) batch.errors.push(error);
   batch.messageIds.push(event.message_id);
   batch.replyMessageId = event.message_id;
   if (batch.timer) clearTimeout(batch.timer);
@@ -123,8 +142,15 @@ function handleEvent(event) {
   seenMessages.set(event.message_id, Date.now());
   if (seenMessages.size > 5000) cleanupSeen();
   const imageKeys = extractImageKeys(event.content);
-  if (imageKeys.length === 0) return;
-  scheduleBatch(event, imageKeys);
+  let recipe = null;
+  let error = null;
+  try {
+    recipe = extractImageRecipe(event.content);
+  } catch (caught) {
+    error = caught.message;
+  }
+  if (imageKeys.length === 0 && !recipe && !error) return;
+  scheduleBatch(event, { imageKeys, recipe, error });
 }
 
 const consumer = spawn(
@@ -185,4 +211,3 @@ function shutdown(signal) {
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
-

@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { eventBatchKey, extractImageKeys, formatReply } from './bot-core.mjs';
+import {
+  eventBatchKey,
+  extractImageKeys,
+  extractImageRecipe,
+  formatRecipeReceipt,
+  formatReply,
+} from './bot-core.mjs';
+import {
+  createImageRecipe,
+  decodeImageRecipe,
+  encodeImageRecipe,
+  extractImageRecipeTokens,
+} from './public/image-recipe.js';
 import {
   compositionUnits,
   fitCrop,
@@ -131,4 +143,56 @@ test('formats keys and complete magic links', () => {
   assert.match(reply, /1\. img_v3_one/);
   assert.match(reply, /https:\/\/magic\.solutionsuite\.cn\/r\?k=img_v3_one/);
   assert.match(reply, /2\. img_v3_two/);
+});
+
+const recipe = createImageRecipe({
+  sourceWidth: 1600,
+  sourceHeight: 900,
+  cols: 3,
+  rows: 2,
+  crop: { x: 0.1, y: 0.2, width: 0.75, height: 0.6 },
+  mode: 'precut',
+  gapRatio: 0.58,
+  outputSize: 512,
+});
+
+test('round-trips the shared V1 image recipe', () => {
+  const token = encodeImageRecipe(recipe);
+  assert.match(token, /^IMAGE_BUDDY_RECIPE_V1:[A-Za-z0-9_-]+$/);
+  assert.deepEqual(decodeImageRecipe(token), recipe);
+});
+
+test('extracts a recipe from nested Lark message content', () => {
+  const token = encodeImageRecipe(recipe);
+  const content = JSON.stringify({
+    zh_cn: {
+      content: [[{ tag: 'text', text: token }]],
+    },
+  });
+  assert.deepEqual(extractImageRecipeTokens(content), [token]);
+  assert.deepEqual(extractImageRecipe(content), recipe);
+});
+
+test('strictly rejects recipe version mismatches and extra fields', () => {
+  const token = encodeImageRecipe(recipe);
+  assert.throws(
+    () => decodeImageRecipe(token.replace('RECIPE_V1', 'RECIPE_V2')),
+    /仅支持 V1，收到 V2/,
+  );
+  assert.throws(
+    () => encodeImageRecipe({ ...recipe, unexpected: true }),
+    /payload 字段必须为/,
+  );
+});
+
+test('formats a validated recipe receipt for one source image', () => {
+  const reply = formatRecipeReceipt(['img_v3_source'], recipe);
+  assert.match(reply, /切图参数读取成功/);
+  assert.match(reply, /img_v3_source/);
+  assert.match(reply, /网格：3 × 2（6 张）/);
+  assert.match(reply, /模式：precut/);
+  assert.match(
+    formatRecipeReceipt(['img_one', 'img_two'], recipe),
+    /期望 1 张原图，收到 2 张/,
+  );
 });
