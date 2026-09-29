@@ -127,7 +127,7 @@ function chooseFile(file) {
     canvasStage.hidden = false;
     resetGridButton.disabled = false;
     generateButton.disabled = false;
-    generateLabel.textContent = `生成 ${currentGrid().cols * currentGrid().rows} 张`;
+    generateLabel.textContent = `生成并复制 ${currentGrid().cols * currentGrid().rows} 张`;
     resetCrop();
     results.hidden = true;
   };
@@ -426,6 +426,17 @@ function canvasToBlob(canvas) {
   });
 }
 
+function canvasToBlobFromDataUrl(dataUrl) {
+  const [metadata, encoded] = dataUrl.split(',');
+  const mime = /data:([^;]+)/.exec(metadata)?.[1] || 'image/png';
+  const bytes = atob(encoded);
+  const buffer = new Uint8Array(bytes.length);
+  for (let index = 0; index < bytes.length; index += 1) {
+    buffer[index] = bytes.charCodeAt(index);
+  }
+  return new Blob([buffer], { type: mime });
+}
+
 function clearGenerated() {
   for (const item of state.generated) {
     if (item.objectUrl) URL.revokeObjectURL(item.objectUrl);
@@ -439,7 +450,6 @@ function clearGenerated() {
 async function generateTiles() {
   if (!state.image || generateButton.disabled) return;
   generateButton.disabled = true;
-  spinner.hidden = false;
   results.hidden = true;
   setNotice();
   const tiles = sourceTileRects();
@@ -447,29 +457,51 @@ async function generateTiles() {
   try {
     clearGenerated();
     const generated = [];
+    const synchronous = tiles.length <= 25;
+
+    if (synchronous) {
+      for (let index = 0; index < tiles.length; index += 1) {
+        const canvas = renderTileCanvas(tiles[index]);
+        const dataUrl = canvas.toDataURL('image/png');
+        const blob = canvasToBlobFromDataUrl(dataUrl);
+        generated.push({
+          blob,
+          index,
+          objectUrl: URL.createObjectURL(blob),
+          dataUrl,
+        });
+      }
+      state.generated = generated;
+      renderResults(generated);
+      results.hidden = false;
+      if (legacyCopyImages(generated)) {
+        setNotice(`已生成并复制 ${generated.length} 张图片，直接粘贴给图片仔`, 'success');
+      } else {
+        openCopyDialog(0);
+        setNotice('已生成切图，但 iframe 未授权自动复制；请在弹窗中逐张复制');
+      }
+      return;
+    }
+
+    spinner.hidden = false;
     for (let index = 0; index < tiles.length; index += 1) {
       generateLabel.textContent = `正在生成 ${index + 1} / ${tiles.length}`;
       const canvas = renderTileCanvas(tiles[index]);
       const blob = await canvasToBlob(canvas);
-      generated.push({
-        blob,
-        index,
-        objectUrl: URL.createObjectURL(blob),
-        dataUrl: tiles.length <= 25 ? canvas.toDataURL('image/png') : null,
-      });
+      generated.push({ blob, index, objectUrl: URL.createObjectURL(blob), dataUrl: null });
       if (index % 12 === 0) await new Promise((resolve) => requestAnimationFrame(resolve));
     }
     state.generated = generated;
     renderResults(generated);
-    setNotice(`已生成 ${generated.length} 张图片，可复制后粘贴给图片仔`, 'success');
     results.hidden = false;
-    results.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    openCopyDialog(0);
+    setNotice(`已生成 ${generated.length} 张图片；数量较多，请使用逐张复制队列`);
   } catch (error) {
     setNotice(error.message || '生成失败，请稍后重试。');
   } finally {
     spinner.hidden = true;
     generateButton.disabled = false;
-    generateLabel.textContent = `生成 ${tiles.length} 张`;
+    generateLabel.textContent = `生成并复制 ${tiles.length} 张`;
   }
 }
 
@@ -662,8 +694,8 @@ function setGrid(cols, rows) {
   const grid = currentGrid();
   tileCount.textContent = `${grid.cols * grid.rows} 张`;
   generateLabel.textContent = state.image
-    ? `生成 ${grid.cols * grid.rows} 张`
-    : '选择图片后生成';
+    ? `生成并复制 ${grid.cols * grid.rows} 张`
+    : '选择图片后复制';
   if (state.image) resetCrop();
 }
 
