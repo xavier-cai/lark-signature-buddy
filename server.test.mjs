@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { detectImage } from './server.mjs';
+import { eventBatchKey, extractImageKeys, formatReply } from './bot-core.mjs';
 import {
   compositionUnits,
   fitCrop,
@@ -94,4 +95,55 @@ test('fit crop remains inside the source image', () => {
   assert.ok(crop.x + crop.width <= 1);
   assert.ok(crop.y + crop.height <= 1);
   assert.ok(Math.abs((crop.width * 1600) / (crop.height * 900) - 1) < 1e-9);
+});
+
+test('extracts image keys from raw, rendered, and post content', () => {
+  assert.deepEqual(extractImageKeys('{"image_key":"img_v3_single"}'), [
+    'img_v3_single',
+  ]);
+  assert.deepEqual(
+    extractImageKeys('![Image](img_v3_first)\n![Image](img_v3_second)'),
+    ['img_v3_first', 'img_v3_second'],
+  );
+  assert.deepEqual(
+    extractImageKeys({
+      zh_cn: {
+        content: [
+          [{ tag: 'img', image_key: 'img_v3_first' }],
+          [{ tag: 'img', image_key: 'img_v3_second' }],
+        ],
+      },
+    }),
+    ['img_v3_first', 'img_v3_second'],
+  );
+});
+
+test('deduplicates repeated image keys', () => {
+  assert.deepEqual(
+    extractImageKeys('img_v3_same img_v3_same img_v3_other'),
+    ['img_v3_same', 'img_v3_other'],
+  );
+});
+
+test('groups image messages by chat, sender, and thread context', () => {
+  assert.equal(
+    eventBatchKey({
+      chat_id: 'oc_chat',
+      sender_id: 'ou_user',
+      thread_id: 'omt_thread',
+    }),
+    'oc_chat:ou_user:omt_thread',
+  );
+  assert.notEqual(
+    eventBatchKey({ chat_id: 'oc_chat', sender_id: 'ou_user' }),
+    eventBatchKey({ chat_id: 'oc_chat', sender_id: 'ou_other' }),
+  );
+});
+
+test('formats keys and complete magic links', () => {
+  const reply = formatReply(['img_v3_one', 'img_v3_two']);
+  assert.match(reply, /收到 2 张图片/);
+  assert.match(reply, /1\. img_v3_one/);
+  assert.match(reply, /https:\/\/magic\.solutionsuite\.cn\/r\?k=img_v3_one/);
+  assert.match(reply, /2\. img_v3_two/);
 });

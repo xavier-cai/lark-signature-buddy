@@ -543,6 +543,11 @@ h2 {
   font-weight: 750;
 }
 
+.copy-all-button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
 .result-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));

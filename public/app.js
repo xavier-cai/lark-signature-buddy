@@ -9,11 +9,6 @@ import {
 const MAX_BYTES = 10 * 1024 * 1024;
 const HANDLE_RADIUS = 9;
 const OUTPUT_SIZE = 512;
-const params = new URLSearchParams(window.location.search);
-const configuredApiUrl =
-  document.querySelector('meta[name="image-buddy-api"]')?.getAttribute('content') || '';
-const configuredApi = configuredApiUrl ? new URL(configuredApiUrl) : null;
-const token = configuredApi?.searchParams.get('token') || params.get('token') || '';
 
 const uploadButton = document.querySelector('#upload-button');
 const uploadButtonLabel = document.querySelector('#upload-button-label');
@@ -51,7 +46,7 @@ const state = {
   crop: null,
   display: null,
   drag: null,
-  uploadedKeys: [],
+  generated: [],
 };
 
 function formatBytes(size) {
@@ -120,7 +115,7 @@ function chooseFile(file) {
     canvasStage.hidden = false;
     resetGridButton.disabled = false;
     generateButton.disabled = false;
-    generateLabel.textContent = `生成并上传 ${currentGrid().cols * currentGrid().rows} 张`;
+    generateLabel.textContent = `生成 ${currentGrid().cols * currentGrid().rows} 张`;
     resetCrop();
     results.hidden = true;
   };
@@ -419,75 +414,40 @@ function canvasToBlob(canvas) {
   });
 }
 
-function uploadUrl() {
-  const url = configuredApi
-    ? new URL('/api/upload', configuredApi)
-    : new URL('/api/upload', window.location.origin);
-  url.searchParams.set('token', token);
-  return url;
-}
-
-async function uploadBlob(blob, index) {
-  const response = await fetch(uploadUrl(), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'image/png',
-      'X-File-Name': encodeURIComponent(`tile-${index + 1}.png`),
-    },
-    body: blob,
-  });
-  const result = await response.json();
-  if (!response.ok || !result.ok) throw new Error(result.message || '上传失败');
-  return result.imageKey;
-}
-
-async function generateAndUpload() {
+async function generateTiles() {
   if (!state.image || generateButton.disabled) return;
   generateButton.disabled = true;
   spinner.hidden = false;
   results.hidden = true;
   setNotice();
   const tiles = sourceTileRects();
-  const uploaded = new Array(tiles.length);
-  let completed = 0;
 
   try {
-    const workerCount = Math.min(4, tiles.length);
-    let nextIndex = 0;
-    const worker = async () => {
-      while (nextIndex < tiles.length) {
-        const index = nextIndex;
-        nextIndex += 1;
-        const canvas = renderTileCanvas(tiles[index]);
-        const blob = await canvasToBlob(canvas);
-        const imageKey = await uploadBlob(blob, index);
-        uploaded[index] = { blob, imageKey, index };
-        completed += 1;
-        generateLabel.textContent = `正在上传 ${completed} / ${tiles.length}`;
-      }
-    };
-    await Promise.all(Array.from({ length: workerCount }, () => worker()));
-    state.uploadedKeys = uploaded.map((item) => item.imageKey);
-    renderResults(uploaded);
-    setNotice(`已生成并上传 ${uploaded.length} 张图片`, 'success');
+    const generated = [];
+    for (let index = 0; index < tiles.length; index += 1) {
+      generateLabel.textContent = `正在生成 ${index + 1} / ${tiles.length}`;
+      const canvas = renderTileCanvas(tiles[index]);
+      const blob = await canvasToBlob(canvas);
+      generated.push({ blob, index });
+      if (index % 12 === 0) await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    state.generated = generated;
+    renderResults(generated);
+    setNotice(`已生成 ${generated.length} 张图片，可复制后粘贴给图片仔`, 'success');
     results.hidden = false;
     results.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   } catch (error) {
-    const message =
-      error instanceof TypeError && error.message === 'Failed to fetch'
-        ? '无法连接本机服务。请先打开文档下方备用入口，接受开发证书后返回重试。'
-        : error.message || '生成失败，请稍后重试。';
-    setNotice(message);
+    setNotice(error.message || '生成失败，请稍后重试。');
   } finally {
     spinner.hidden = true;
     generateButton.disabled = false;
-    generateLabel.textContent = `生成并上传 ${tiles.length} 张`;
+    generateLabel.textContent = `生成 ${tiles.length} 张`;
   }
 }
 
-function renderResults(uploaded) {
+function renderResults(generated) {
   resultGrid.innerHTML = '';
-  for (const item of uploaded) {
+  for (const item of generated) {
     const card = document.createElement('article');
     card.className = 'result-card';
     const image = document.createElement('img');
@@ -502,27 +462,30 @@ function renderResults(uploaded) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'copy-key';
-    button.textContent = '复制 Key';
-    button.addEventListener('click', () => copyText(item.imageKey, button));
+    button.textContent = '复制图片';
+    button.addEventListener('click', () => copyImage(item.blob, button));
     const code = document.createElement('code');
-    code.textContent = item.imageKey;
+    code.textContent = '粘贴给图片仔后获取 Image Key';
     header.append(title, button);
     card.append(image, header, code);
     resultGrid.append(card);
   }
 }
 
-async function copyText(text, button) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const input = document.createElement('textarea');
-    input.value = text;
-    document.body.append(input);
-    input.select();
-    document.execCommand('copy');
-    input.remove();
+async function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('读取图片失败'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function copyImage(blob, button) {
+  if (!navigator.clipboard?.write || !window.ClipboardItem) {
+    throw new Error('当前浏览器不支持复制图片，请长按或右键图片复制');
   }
+  await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
   const original = button.textContent;
   button.textContent = '已复制';
   window.setTimeout(() => {
@@ -530,12 +493,52 @@ async function copyText(text, button) {
   }, 1200);
 }
 
+async function copyAllImages() {
+  if (state.generated.length === 0) return;
+  copyAllButton.disabled = true;
+  const original = copyAllButton.textContent;
+  copyAllButton.textContent = '正在复制…';
+  try {
+    const urls = await Promise.all(state.generated.map((item) => blobToDataUrl(item.blob)));
+    const html = `<div>${urls
+      .map((url, index) => `<img src="${url}" alt="tile-${index + 1}.png">`)
+      .join('')}</div>`;
+    if (!navigator.clipboard?.write || !window.ClipboardItem) {
+      throw new Error('当前浏览器不支持批量复制，请逐张复制');
+    }
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'text/html': new Blob([html], { type: 'text/html' }),
+        'text/plain': new Blob(
+          [`${state.generated.length} 张切图，请粘贴到飞书发送`],
+          { type: 'text/plain' },
+        ),
+      }),
+    ]);
+    copyAllButton.textContent = '已复制，去粘贴';
+    setNotice(
+      state.generated.length > 25
+        ? `已复制 ${state.generated.length} 张；数量较多，若飞书只识别部分图片请分批逐张复制`
+        : `已复制 ${state.generated.length} 张图片，直接粘贴给图片仔`,
+      'success',
+    );
+  } catch (error) {
+    copyAllButton.textContent = '复制失败';
+    setNotice(error.message || '批量复制失败，请逐张复制');
+  } finally {
+    window.setTimeout(() => {
+      copyAllButton.textContent = original;
+      copyAllButton.disabled = false;
+    }, 1600);
+  }
+}
+
 function setGrid(cols, rows) {
   state.grid = `${cols}x${rows}`;
   const grid = currentGrid();
   tileCount.textContent = `${grid.cols * grid.rows} 张`;
   generateLabel.textContent = state.image
-    ? `生成并上传 ${grid.cols * grid.rows} 张`
+    ? `生成 ${grid.cols * grid.rows} 张`
     : '选择图片后生成';
   if (state.image) resetCrop();
 }
@@ -549,10 +552,8 @@ uploadButton.addEventListener('click', () => fileInput.click());
 emptyStage.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => chooseFile(fileInput.files?.[0]));
 resetGridButton.addEventListener('click', resetCrop);
-generateButton.addEventListener('click', generateAndUpload);
-copyAllButton.addEventListener('click', () =>
-  copyText(state.uploadedKeys.join('\n'), copyAllButton),
-);
+generateButton.addEventListener('click', generateTiles);
+copyAllButton.addEventListener('click', copyAllImages);
 
 function updateGridFromInputs({ commit = false } = {}) {
   let cols = gridColsInput.valueAsNumber;
@@ -641,8 +642,3 @@ window.addEventListener('paste', (event) => {
 window.addEventListener('resize', () => {
   if (state.image) drawEditor();
 });
-
-if (!token) {
-  setNotice('当前链接缺少访问令牌，请使用服务启动时输出的完整 URL。');
-  generateButton.disabled = true;
-}

@@ -3,11 +3,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const API_URL = process.env.IMAGE_BUDDY_API_URL;
-
-if (!API_URL) {
-  throw new Error('IMAGE_BUDDY_API_URL is required');
-}
 
 const [template, css, gridCore, js] = await Promise.all([
   readFile(join(ROOT, 'public', 'index.html'), 'utf8'),
@@ -27,8 +22,7 @@ const output = template
     `<meta name="color-scheme" content="light" />
     <meta name="use-iframe" content="true" />
     <meta name="html-box-height-mode" content="viewport" />
-    <meta name="description" content="图片仔：上传图片并获取飞书 Image Key 的本地工具" />
-    <meta name="image-buddy-api" content="${API_URL.replaceAll('&', '&amp;')}" />`,
+    <meta name="description" content="图片仔：离线网格切图并复制图片的文档工具" />`,
   )
   .replace('<link rel="stylesheet" href="./styles.css" />', `<style>${css}</style>`)
   .replace(
