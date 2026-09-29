@@ -1,5 +1,5 @@
 export const IMAGE_RECIPE_NAME = 'image-buddy-recipe';
-export const IMAGE_RECIPE_VERSION = 3;
+export const IMAGE_RECIPE_VERSION = 4;
 export const IMAGE_RECIPE_PREFIX = `IB${IMAGE_RECIPE_VERSION}:`;
 export const IMAGE_RECIPE_BYTE_LENGTH = 41;
 export const IMAGE_RECIPE_TOKEN_MAX_LENGTH = 64;
@@ -107,7 +107,18 @@ export function crc32(bytes) {
 export function validateImageRecipe(value) {
   assertExactKeys(
     value,
-    ['protocol', 'version', 'source', 'grid', 'crop', 'mode', 'gapRatio', 'output', 'transport'],
+    [
+      'protocol',
+      'version',
+      'source',
+      'grid',
+      'crop',
+      'mode',
+      'gapRatio',
+      'colorMapping',
+      'output',
+      'transport',
+    ],
     'payload',
   );
   if (value.protocol !== IMAGE_RECIPE_NAME) fail(`protocol 必须是 ${IMAGE_RECIPE_NAME}`);
@@ -133,11 +144,14 @@ export function validateImageRecipe(value) {
 
   if (!MODE_TO_CODE.has(value.mode)) fail('mode 必须是 plain 或 precut');
   assertNumber(value.gapRatio, 0, 1, 'gapRatio');
+  if (typeof value.colorMapping !== 'boolean') {
+    fail('colorMapping 必须是 boolean');
+  }
 
   assertExactKeys(value.output, ['width', 'height', 'format'], 'output');
   assertInteger(value.output.width, 1, 4096, 'output.width');
   assertInteger(value.output.height, 1, 4096, 'output.height');
-  if (value.output.width !== value.output.height) fail('V3 仅支持正方形输出');
+  if (value.output.width !== value.output.height) fail('V4 仅支持正方形输出');
   if (!FORMAT_TO_CODE.has(value.output.format)) {
     fail('output.format 必须是 png 或 apng');
   }
@@ -158,6 +172,7 @@ export function createImageRecipe({
   crop,
   mode,
   gapRatio,
+  colorMapping,
   outputSize,
   contentRect,
 }) {
@@ -179,6 +194,7 @@ export function createImageRecipe({
     },
     mode,
     gapRatio: quantizeNormalized(gapRatio),
+    colorMapping,
     output: {
       width: outputSize,
       height: outputSize,
@@ -202,7 +218,10 @@ export function encodeImageRecipe(recipe) {
   bytes[0] = 0x49;
   bytes[1] = 0x42;
   bytes[2] = IMAGE_RECIPE_VERSION;
-  bytes[3] = MODE_TO_CODE.get(value.mode) | (value.source.animated ? 0x80 : 0);
+  bytes[3] =
+    MODE_TO_CODE.get(value.mode) |
+    (value.colorMapping ? 0x40 : 0) |
+    (value.source.animated ? 0x80 : 0);
   view.setUint32(4, value.source.width);
   view.setUint32(8, value.source.height);
   bytes[12] = value.grid.cols;
@@ -245,7 +264,7 @@ export function decodeImageRecipe(token) {
   if (bytes[0] !== 0x49 || bytes[1] !== 0x42) fail('magic 不匹配');
   if (bytes[2] !== markerVersion) fail('协议标记与 payload 版本不一致');
   if (view.getUint32(37) !== crc32(bytes.subarray(0, 37))) fail('CRC32 校验失败');
-  const modeCode = bytes[3] & 0x7f;
+  const modeCode = bytes[3] & 0x3f;
   const mode = [...MODE_TO_CODE].find(([, code]) => code === modeCode)?.[0];
   if (!mode) fail('mode 编码未知');
   const format = [...FORMAT_TO_CODE].find(([, code]) => code === bytes[34])?.[0];
@@ -272,6 +291,7 @@ export function decodeImageRecipe(token) {
     },
     mode,
     gapRatio: normalized[4],
+    colorMapping: Boolean(bytes[3] & 0x40),
     output: {
       width: view.getUint16(32),
       height: view.getUint16(32),

@@ -12,7 +12,7 @@ import {
 } from './grid-core.js';
 import {
   decodeImageFrames,
-  encodeApngFrames,
+  encodeGifFrames,
   frameToCanvas,
 } from './animation-core.js';
 import { mapToLuminanceAlpha } from './color-mapping.js';
@@ -88,7 +88,7 @@ function updateCopyLabel() {
   }
   const mappingLabel = state.colorMapping ? '色彩映射' : '原始色彩';
   generateLabel.textContent = state.animation?.frames.length > 1
-    ? `生成并下载 ${mappingLabel} APNG 动图`
+    ? `生成并复制 GIF 动图（${mappingLabel}输出）`
     : `生成并复制 ${mappingLabel} PNG 图片`;
 }
 
@@ -607,24 +607,12 @@ function renderOutputPreview() {
   }
 }
 
-function transportFrame(frame) {
-  if (!state.colorMapping) return frame;
-  return {
-    ...frame,
-    data: mapToLuminanceAlpha(frame.data),
-  };
-}
-
 function paintTransportFrame(context, frame, layout) {
-  if (!state.colorMapping) {
-    context.fillStyle = '#ffffff';
-    context.fillRect(0, 0, context.canvas.width, context.canvas.height);
-  } else {
-    context.clearRect(0, 0, context.canvas.width, context.canvas.height);
-  }
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, context.canvas.width, context.canvas.height);
   context.drawImage(
     frameToCanvas(
-      transportFrame(frame),
+      frame,
       layout.sourceWidth,
       layout.sourceHeight,
     ),
@@ -645,6 +633,7 @@ function currentRecipeToken(layout) {
       crop: state.crop,
       mode: state.mode,
       gapRatio: state.gapRatio,
+      colorMapping: state.colorMapping,
       outputSize: OUTPUT_SIZE,
       contentRect: {
         x: layout.sourceX / layout.canvasWidth,
@@ -732,7 +721,7 @@ async function buildTransportImage() {
       );
     });
   } else {
-    blob = await encodeApngFrames({
+    blob = await encodeGifFrames({
       width: layout.canvasWidth,
       height: layout.canvasHeight,
       frames,
@@ -780,20 +769,12 @@ async function copyImageRecipe() {
     transportPreview.src = previewUrl;
     transportDownload.href = previewUrl;
     const animated = isAnimated();
-    const extension = 'png';
-    const formatLabel = animated ? 'APNG' : 'PNG';
+    const extension = animated ? 'gif' : 'png';
+    const formatLabel = animated ? 'GIF' : 'PNG';
     transportDownload.download = `image-buddy-transport.${extension}`;
     transportDetail.textContent =
       `${layout.canvasWidth} × ${layout.canvasHeight} · ${state.animation.frames.length} 帧 · ${state.colorMapping ? '色彩映射' : '原始色彩'} · ${recipeToken.length} 字符`;
     transportDebug.hidden = false;
-    if (animated) {
-      transportDownload.click();
-      setNotice(
-        'APNG 已下载为 .png 文件；请将它作为图片上传给图片仔。不要复制粘贴，剪贴板会丢失动图帧。',
-        'success',
-      );
-      return;
-    }
     const clipboardPromise = startAsyncCopyImage(blob);
     const nativeCopied = clipboardPromise ? await clipboardPromise : false;
     if (!nativeCopied) {

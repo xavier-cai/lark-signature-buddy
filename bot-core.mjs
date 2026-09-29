@@ -54,6 +54,7 @@ export function formatRecipeReceipt(imageKeys, recipe, transportImage = null) {
     `选区：x=${crop.x}, y=${crop.y}, width=${crop.width}, height=${crop.height}`,
     `模式：${mode}`,
     `间隔比例：${gapRatio}`,
+    `色彩映射：${recipe.colorMapping ? '开启' : '关闭'}`,
     `输出：${output.width} × ${output.height} ${output.format.toUpperCase()}`,
     `原图区域：x=${contentRect.x}, y=${contentRect.y}, width=${contentRect.width}, height=${contentRect.height}`,
   ];

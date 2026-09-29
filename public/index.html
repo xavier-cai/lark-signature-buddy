@@ -15,7 +15,7 @@
           <div>
             <p class="eyebrow">IMAGE BUDDY</p>
             <h1>网格切图与图片仔</h1>
-            <p class="intro">同屏调整选区、网格和间隔预裁剪；静态图输出 PNG，动图统一输出 APNG。</p>
+            <p class="intro">同屏调整选区、网格和间隔预裁剪；动图以 GIF 传输，切片输出 APNG。</p>
           </div>
         </div>
         <button class="upload-button" id="upload-button" type="button">
@@ -111,7 +111,7 @@
               </label>
             </div>
             <p class="mapping-warning" id="mapping-warning" hidden>
-              APNG 会保留全部帧与 8-bit 半透明色彩映射效果。
+              中间 GIF 保留原始色彩；图片仔切片时执行映射并输出 8-bit 半透明 APNG。
             </p>
           </section>
 
@@ -173,7 +173,7 @@
               id="transport-preview"
               alt="带紧凑二维码的传输图片"
             />
-            <p>静态 PNG 可复制粘贴；APNG 会以 .png 文件下载，请作为图片上传，避免剪贴板丢失动图帧。</p>
+            <p>中间传输图可复制粘贴；图片仔会按 QR 参数生成最终 PNG/APNG。</p>
             <a id="transport-download" download="image-buddy-transport">下载传输图片</a>
           </section>
         </aside>
@@ -181,7 +181,7 @@
 
       <footer>
         <span class="status-dot"></span>
-        <span>二维码仅保留机器识别所需尺寸；动图保留全部帧、帧时长与半透明并统一输出 APNG。</span>
+        <span>动图以兼容飞书的 GIF 传输；图片仔切片并按 QR 参数输出 APNG。</span>
       </footer>
     </main>
 

@@ -17,7 +17,7 @@ export async function decodeRecipeFromImage(input) {
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   const kind = detectImageKind(bytes);
   const animation =
-    kind.format === 'apng' ? await decodeImageBytes(bytes, 'image/apng') : null;
+    kind.animated ? await decodeImageBytes(bytes) : null;
   let width;
   let pageHeight;
   let pages;
@@ -40,7 +40,7 @@ export async function decodeRecipeFromImage(input) {
       limitInputPixels: MAX_IMAGE_PIXELS,
       failOn: 'warning',
     });
-    format = 'apng';
+    format = kind.format;
   } else {
     scanner = sharp(bytes, {
       page: 0,
@@ -78,8 +78,8 @@ export async function decodeRecipeFromImage(input) {
   });
   if (!qr?.data) throw new Error('未识别到 Image Buddy QR 参数');
   const recipe = decodeImageRecipe(qr.data);
-  if (recipe.source.animated && kind.format !== 'apng') {
-    throw new Error('V3 动图传输格式必须是 APNG');
+  if (recipe.source.animated && kind.format !== 'gif') {
+    throw new Error('V4 动图传输格式必须是 GIF');
   }
   if (recipe.source.frames !== pages) {
     throw new Error(

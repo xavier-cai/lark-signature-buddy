@@ -15,7 +15,7 @@ export function validateStaticImageSize(width, height) {
     height > MAX_IMAGE_EDGE ||
     width * height > MAX_IMAGE_PIXELS
   ) {
-    throw new Error('图片尺寸过大，当前 V3 上限为 8192 px / 32 MP');
+    throw new Error('图片尺寸过大，当前 V4 上限为 8192 px / 32 MP');
   }
 }
 

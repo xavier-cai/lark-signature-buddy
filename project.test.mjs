@@ -13,6 +13,7 @@ import {
   decodeImageBytes,
   encodeApngBytes,
   encodeApngFrames,
+  encodeGifFrames,
 } from './public/animation-core.js';
 import { mapToLuminanceAlpha } from './public/color-mapping.js';
 import {
@@ -218,6 +219,7 @@ const recipe = createImageRecipe({
   crop: { x: 0.1, y: 0.2, width: 0.75, height: 0.6 },
   mode: 'precut',
   gapRatio: 0.58,
+  colorMapping: true,
   outputSize: 512,
   contentRect: {
     x: layout.sourceX / layout.canvasWidth,
@@ -227,24 +229,29 @@ const recipe = createImageRecipe({
   },
 });
 
-test('round-trips the shared V3 image recipe', () => {
+test('round-trips the shared V4 image recipe', () => {
   const token = encodeImageRecipe(recipe);
-  assert.match(token, /^IB3:[A-Za-z0-9_-]+$/);
+  assert.match(token, /^IB4:[A-Za-z0-9_-]+$/);
   assert.ok(token.length <= 64);
   assert.deepEqual(decodeImageRecipe(token), recipe);
   assert.equal(recipe.output.format, 'png');
   assert.equal(recipe.source.animated, false);
+  assert.equal(recipe.colorMapping, true);
 });
 
 test('strictly rejects recipe version mismatches and extra fields', () => {
   const token = encodeImageRecipe(recipe);
   assert.throws(
-    () => decodeImageRecipe(token.replace('IB3:', 'IB2:')),
-    /仅支持 V3，收到 V2/,
+    () => decodeImageRecipe(token.replace('IB4:', 'IB3:')),
+    /仅支持 V4，收到 V3/,
   );
-  const replacement = token.endsWith('A') ? 'B' : 'A';
+  const mutationIndex = 12;
+  const replacement = token[mutationIndex] === 'A' ? 'B' : 'A';
   assert.throws(
-    () => decodeImageRecipe(`${token.slice(0, -1)}${replacement}`),
+    () =>
+      decodeImageRecipe(
+        `${token.slice(0, mutationIndex)}${replacement}${token.slice(mutationIndex + 1)}`,
+      ),
     /CRC32 校验失败/,
   );
   assert.throws(
@@ -424,6 +431,7 @@ test('preserves animation frames, delays, loop, and alpha in APNG tiles', async 
     crop: { x: 0.05, y: 0.05, width: 0.9, height: 0.9 },
     mode: 'plain',
     gapRatio: 0.58,
+    colorMapping: true,
     outputSize: 512,
     contentRect: {
       x: animatedLayout.sourceX / animatedLayout.canvasWidth,
@@ -479,7 +487,7 @@ test('preserves animation frames, delays, loop, and alpha in APNG tiles', async 
       canvas.byteLength,
     ));
   }
-  const transport = Buffer.from(encodeApngBytes({
+  const transportBlob = await encodeGifFrames({
     width: animatedLayout.canvasWidth,
     height: animatedLayout.canvasHeight,
     frames: [
@@ -487,7 +495,8 @@ test('preserves animation frames, delays, loop, and alpha in APNG tiles', async 
       { data: transportFrames[1], delay: 200 },
     ],
     loop: 0,
-  }));
+  });
+  const transport = Buffer.from(await transportBlob.arrayBuffer());
   const decoded = await decodeRecipeFromImage(transport);
   assert.deepEqual(decoded.recipe, animatedRecipe);
   assert.equal(decoded.image.pages, 2);
@@ -497,7 +506,10 @@ test('preserves animation frames, delays, loop, and alpha in APNG tiles', async 
   const tile = await renderTile(
     transport,
     buildTileSpecs(decoded.recipe, decoded.image)[0],
-    decoded.image,
+    {
+      ...decoded.image,
+      colorMapping: decoded.recipe.colorMapping,
+    },
   );
   const decodedTile = await decodeImageBytes(tile, 'image/apng');
   assert.equal(decodedTile.width, 512);
@@ -570,7 +582,7 @@ test('browser APNG frames can be normalized into a multi-frame APNG', async () =
   assert.equal(apng.loop, 0);
 });
 
-test('rejects transport canvases beyond the V3 resource limits', () => {
+test('rejects transport canvases beyond the V4 resource limits', () => {
   assert.throws(() => transportLayoutForSource(8192, 8192, 147), /32 MP/);
   assert.throws(() => transportLayoutForSource(9000, 10, 147), /8192 px/);
   assert.throws(() => validateStaticImageSize(8192, 8192), /32 MP/);

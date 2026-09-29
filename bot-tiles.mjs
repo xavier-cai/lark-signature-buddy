@@ -7,6 +7,7 @@ import {
   decodeImageBytes,
   encodeApngBytes,
 } from './public/animation-core.js';
+import { mapToLuminanceAlpha } from './public/color-mapping.js';
 import { tileRects } from './public/grid-core.js';
 
 const MAX_TILES = 225;
@@ -96,8 +97,8 @@ export function buildTileSpecs(recipe, transportImage) {
 
 export async function renderTile(input, spec, animation = {}) {
   if (animation.pages > 1) {
-    if (animation.format !== 'apng') {
-      throw new Error('V3 动图切片只支持 APNG');
+    if (animation.format !== 'gif') {
+      throw new Error('V4 动图传输只支持 GIF');
     }
     const decoded = animation.frames
       ? animation
@@ -124,12 +125,15 @@ export async function renderTile(input, spec, animation = {}) {
           })
           .raw()
           .toBuffer();
+        const rgba = new Uint8ClampedArray(
+          data.buffer,
+          data.byteOffset,
+          data.byteLength,
+        );
         return {
-          data: new Uint8ClampedArray(
-            data.buffer,
-            data.byteOffset,
-            data.byteLength,
-          ),
+          data: animation.colorMapping
+            ? mapToLuminanceAlpha(rgba)
+            : rgba,
           delay: frame.delay,
         };
       }),
@@ -155,6 +159,19 @@ export async function renderTile(input, spec, animation = {}) {
       fit: 'fill',
       kernel: sharp.kernel.lanczos3,
     });
+  if (animation.colorMapping) {
+    const { data } = await pipeline
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    return sharp(Buffer.from(mapToLuminanceAlpha(data)), {
+      raw: {
+        width: spec.outputWidth,
+        height: spec.outputHeight,
+        channels: 4,
+      },
+    }).png().toBuffer();
+  }
   return pipeline.png().toBuffer();
 }
 
@@ -181,9 +198,13 @@ export async function generateAndUploadTiles({
   const renderAnimation = transportImage.pages > 1
     ? {
       ...transportImage,
-      ...(await decodeImageBytes(input, 'image/apng')),
+      ...(await decodeImageBytes(input, 'image/gif')),
+      colorMapping: recipe.colorMapping,
     }
-    : transportImage;
+    : {
+      ...transportImage,
+      colorMapping: recipe.colorMapping,
+    };
   const directory = await mkdtemp('.image-buddy-tiles-');
   const imageKeys = new Array(specs.length);
   let cursor = 0;
@@ -196,7 +217,7 @@ export async function generateAndUploadTiles({
       cursor += 1;
       if (current >= specs.length) return;
       const spec = specs[current];
-      const extension = transportImage.pages > 1 ? 'apng' : 'png';
+      const extension = 'png';
       const path = join(
         directory,
         `tile-${String(current + 1).padStart(3, '0')}.${extension}`,

@@ -1,4 +1,4 @@
-import { decode as decodeGif, decodeFrames } from 'modern-gif';
+import { decode as decodeGif, decodeFrames, encode as encodeGif } from 'modern-gif';
 import UPNG from 'upng-js';
 
 import {
@@ -116,6 +116,28 @@ export async function decodeImageFrames(file) {
   const kind = detectImageKind(bytes);
   if (kind.animated) return decodeImageBytes(bytes, file.type);
   return decodeStaticImage(file);
+}
+
+export async function encodeGifFrames({
+  width,
+  height,
+  frames,
+  loop = 0,
+}) {
+  validateAnimationWork(width, height, frames.length);
+  const output = await encodeGif({
+    width,
+    height,
+    looped: true,
+    loopCount: loop,
+    frames: frames.map((frame) => ({
+      data: frame.data,
+      delay: clampDelay(frame.delay),
+    })),
+    maxColors: 255,
+    dither: 'floyd-steinberg',
+  });
+  return new Blob([output], { type: 'image/gif' });
 }
 
 function setApngLoop(bytes, loop) {
