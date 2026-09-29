@@ -323,6 +323,99 @@ h2 {
   font-weight: 800;
 }
 
+.frame-count,
+.animation-badge {
+  padding: 5px 9px;
+  border-radius: 999px;
+  color: #2866f6;
+  background: #eaf0ff;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.frame-picker {
+  display: grid;
+  grid-auto-columns: 88px;
+  grid-auto-flow: column;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 2px 2px 9px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-color: #bdc9e6 transparent;
+  scrollbar-width: thin;
+}
+
+.frame-option {
+  position: relative;
+  width: 88px;
+  height: 66px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background:
+    linear-gradient(45deg, #e7e9ed 25%, transparent 25%) 0 0 / 12px 12px,
+    linear-gradient(-45deg, #e7e9ed 25%, transparent 25%) 0 6px / 12px 12px,
+    #fff;
+  box-shadow: 0 0 0 1px #dfe3ec;
+  overflow: hidden;
+}
+
+.frame-option:hover {
+  border-color: #9bb5f7;
+}
+
+.frame-option.selected {
+  border-color: #2866f6;
+  box-shadow: 0 0 0 2px rgba(40, 102, 246, 0.14);
+}
+
+.frame-option canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.frame-option span {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  min-width: 20px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(14, 18, 27, 0.72);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.animation-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #13794c;
+  background: #e7f7ef;
+}
+
+.animation-badge span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #20a966;
+  box-shadow: 0 0 0 3px rgba(32, 169, 102, 0.13);
+  animation: preview-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes preview-pulse {
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+
 .grid-inputs {
   display: flex;
   margin-top: 14px;

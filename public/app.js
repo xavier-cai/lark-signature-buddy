@@ -39,11 +39,15 @@ const resetGridButton = document.querySelector('#reset-grid');
 const gridColsInput = document.querySelector('#grid-cols');
 const gridRowsInput = document.querySelector('#grid-rows');
 const tileCount = document.querySelector('#tile-count');
+const frameSection = document.querySelector('#frame-section');
+const frameCount = document.querySelector('#frame-count');
+const framePicker = document.querySelector('#frame-picker');
 const modeOptions = document.querySelector('#mode-options');
 const gapControl = document.querySelector('#gap-control');
 const gapRatioInput = document.querySelector('#gap-ratio');
 const gapOutput = document.querySelector('#gap-output');
 const outputPreview = document.querySelector('#output-preview');
+const animationBadge = document.querySelector('#animation-badge');
 const notice = document.querySelector('#notice');
 const generateButton = document.querySelector('#generate-button');
 const generateLabel = document.querySelector('#generate-label');
@@ -58,6 +62,10 @@ const state = {
   image: null,
   imageUrl: null,
   animation: null,
+  selectedFrame: 0,
+  frameCanvas: null,
+  previewTimer: null,
+  previewGeneration: 0,
   grid: '2x2',
   mode: 'plain',
   gapRatio: 0.58,
@@ -110,15 +118,107 @@ function currentAspect() {
   return selectionAspect(cols, rows, state.mode, state.gapRatio);
 }
 
+function isAnimated() {
+  return (state.animation?.frames.length || 0) > 1;
+}
+
+function sourceWidth() {
+  return state.animation?.width || state.image?.naturalWidth || 0;
+}
+
+function sourceHeight() {
+  return state.animation?.height || state.image?.naturalHeight || 0;
+}
+
+function sourceForFrame(index = state.selectedFrame) {
+  if (!state.animation) return state.image;
+  if (!state.frameCanvas) {
+    state.frameCanvas = document.createElement('canvas');
+    state.frameCanvas.width = state.animation.width;
+    state.frameCanvas.height = state.animation.height;
+  }
+  state.frameCanvas
+    .getContext('2d')
+    .putImageData(
+      new ImageData(
+        state.animation.frames[index].data,
+        state.animation.width,
+        state.animation.height,
+      ),
+      0,
+      0,
+    );
+  return state.frameCanvas;
+}
+
 function resetCrop() {
   if (!state.image) return;
   state.crop = fitCrop(
-    state.image.naturalWidth,
-    state.image.naturalHeight,
+    sourceWidth(),
+    sourceHeight(),
     currentAspect(),
   );
   drawEditor();
   renderOutputPreview();
+}
+
+function selectFrame(index) {
+  if (!state.animation || index < 0 || index >= state.animation.frames.length) return;
+  state.selectedFrame = index;
+  for (const button of framePicker.querySelectorAll('.frame-option')) {
+    const selected = Number(button.dataset.frameIndex) === index;
+    button.classList.toggle('selected', selected);
+    button.setAttribute('aria-selected', String(selected));
+  }
+  drawEditor();
+}
+
+function renderFramePicker() {
+  framePicker.replaceChildren();
+  frameSection.hidden = !isAnimated();
+  animationBadge.hidden = !isAnimated();
+  if (!isAnimated()) return;
+
+  frameCount.textContent = `${state.animation.frames.length} 帧`;
+  const fragment = document.createDocumentFragment();
+  state.animation.frames.forEach((frame, index) => {
+    const button = document.createElement('button');
+    button.className = 'frame-option';
+    button.type = 'button';
+    button.dataset.frameIndex = String(index);
+    button.setAttribute('role', 'option');
+    button.setAttribute('aria-label', `第 ${index + 1} 帧，停留 ${frame.delay} 毫秒`);
+    button.setAttribute('aria-selected', String(index === state.selectedFrame));
+    button.title = `第 ${index + 1} 帧 · ${frame.delay} ms`;
+    if (index === state.selectedFrame) button.classList.add('selected');
+
+    const thumbnail = document.createElement('canvas');
+    thumbnail.width = 88;
+    thumbnail.height = 66;
+    const context = thumbnail.getContext('2d');
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    const scale = Math.min(
+      thumbnail.width / state.animation.width,
+      thumbnail.height / state.animation.height,
+    );
+    const width = Math.max(1, Math.round(state.animation.width * scale));
+    const height = Math.max(1, Math.round(state.animation.height * scale));
+    context.drawImage(
+      sourceForFrame(index),
+      Math.round((thumbnail.width - width) / 2),
+      Math.round((thumbnail.height - height) / 2),
+      width,
+      height,
+    );
+
+    const label = document.createElement('span');
+    label.textContent = `${index + 1}`;
+    button.append(thumbnail, label);
+    button.addEventListener('click', () => selectFrame(index));
+    fragment.append(button);
+  });
+  framePicker.append(fragment);
 }
 
 async function chooseFile(file) {
@@ -161,6 +261,8 @@ async function chooseFile(file) {
     state.image = image;
     state.imageUrl = imageUrl;
     state.animation = animation;
+    state.selectedFrame = 0;
+    state.frameCanvas = null;
     fileName.textContent = file.name || '粘贴的图片';
     fileDetail.textContent =
       `${image.naturalWidth} × ${image.naturalHeight} · ${animation.frames.length} 帧 · ${formatBytes(file.size)}`;
@@ -171,6 +273,7 @@ async function chooseFile(file) {
     generateButton.disabled = false;
     transportDebug.hidden = true;
     updateCopyLabel();
+    renderFramePicker();
     resetCrop();
   } catch (error) {
     setNotice(error.message);
@@ -182,11 +285,11 @@ function layoutCanvas() {
   const maxWidth = Math.max(320, canvasStage.clientWidth);
   const maxHeight = 550;
   const scale = Math.min(
-    maxWidth / state.image.naturalWidth,
-    maxHeight / state.image.naturalHeight,
+    maxWidth / sourceWidth(),
+    maxHeight / sourceHeight(),
   );
-  const width = Math.max(1, Math.round(state.image.naturalWidth * scale));
-  const height = Math.max(1, Math.round(state.image.naturalHeight * scale));
+  const width = Math.max(1, Math.round(sourceWidth() * scale));
+  const height = Math.max(1, Math.round(sourceHeight() * scale));
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   editorCanvas.width = Math.round(width * dpr);
   editorCanvas.height = Math.round(height * dpr);
@@ -198,7 +301,7 @@ function layoutCanvas() {
 
 function cropToDisplay(crop = state.crop) {
   if (!state.display || !crop) return null;
-  const imageAspect = state.image.naturalWidth / state.image.naturalHeight;
+  const imageAspect = sourceWidth() / sourceHeight();
   return {
     x: crop.x * state.display.width,
     y: crop.y * state.display.height,
@@ -221,8 +324,9 @@ function drawEditor() {
   if (!state.image || !state.crop) return;
   state.display = layoutCanvas();
   const { width, height } = state.display;
+  const source = sourceForFrame();
   editorContext.clearRect(0, 0, width, height);
-  editorContext.drawImage(state.image, 0, 0, width, height);
+  editorContext.drawImage(source, 0, 0, width, height);
 
   const rect = cropToDisplay();
   editorContext.save();
@@ -230,11 +334,11 @@ function drawEditor() {
   editorContext.fillRect(0, 0, width, height);
   editorContext.clearRect(rect.x, rect.y, rect.width, rect.height);
   editorContext.drawImage(
-    state.image,
-    state.crop.x * state.image.naturalWidth,
-    state.crop.y * state.image.naturalHeight,
-    state.crop.width * state.image.naturalWidth,
-    state.crop.height * state.image.naturalHeight,
+    source,
+    state.crop.x * sourceWidth(),
+    state.crop.y * sourceHeight(),
+    state.crop.width * sourceWidth(),
+    state.crop.height * sourceHeight(),
     rect.x,
     rect.y,
     rect.width,
@@ -249,11 +353,11 @@ function drawEditor() {
     for (const tile of rects) {
       const displayTile = cropToDisplay(tile);
       editorContext.drawImage(
-        state.image,
-        tile.x * state.image.naturalWidth,
-        tile.y * state.image.naturalHeight,
-        tile.width * state.image.naturalWidth,
-        tile.height * state.image.naturalHeight,
+        source,
+        tile.x * sourceWidth(),
+        tile.y * sourceHeight(),
+        tile.width * sourceWidth(),
+        tile.height * sourceHeight(),
         displayTile.x,
         displayTile.y,
         displayTile.width,
@@ -381,14 +485,20 @@ function sourceTileRects() {
   const { cols, rows } = currentGrid();
   return tileRects(state.crop, cols, rows, state.mode, state.gapRatio).map((tile) => ({
     ...tile,
-    x: tile.x * state.image.naturalWidth,
-    y: tile.y * state.image.naturalHeight,
-    width: tile.width * state.image.naturalWidth,
-    height: tile.height * state.image.naturalHeight,
+    x: tile.x * sourceWidth(),
+    y: tile.y * sourceHeight(),
+    width: tile.width * sourceWidth(),
+    height: tile.height * sourceHeight(),
   }));
 }
 
 function renderOutputPreview() {
+  state.previewGeneration += 1;
+  const generation = state.previewGeneration;
+  if (state.previewTimer) {
+    clearTimeout(state.previewTimer);
+    state.previewTimer = null;
+  }
   if (!state.image) {
     outputPreview.innerHTML = '<span>选择图片后显示</span>';
     return;
@@ -412,30 +522,47 @@ function renderOutputPreview() {
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'high';
   const tiles = sourceTileRects();
-  for (const tile of tiles) {
-    const x = tile.col * (tileSize + gap);
-    const y = tile.row * (tileSize + gap);
-    context.drawImage(
-      state.image,
-      tile.x,
-      tile.y,
-      tile.width,
-      tile.height,
-      x,
-      y,
-      tileSize,
-      tileSize,
-    );
-  }
+  const drawFrame = (frameIndex) => {
+    context.clearRect(0, 0, width, height);
+    const source = sourceForFrame(frameIndex);
+    for (const tile of tiles) {
+      const x = tile.col * (tileSize + gap);
+      const y = tile.row * (tileSize + gap);
+      context.drawImage(
+        source,
+        tile.x,
+        tile.y,
+        tile.width,
+        tile.height,
+        x,
+        y,
+        tileSize,
+        tileSize,
+      );
+    }
+  };
+  drawFrame(0);
   outputPreview.replaceChildren(preview);
+  if (isAnimated()) {
+    let frameIndex = 0;
+    const scheduleNextFrame = () => {
+      state.previewTimer = setTimeout(() => {
+        if (generation !== state.previewGeneration) return;
+        frameIndex = (frameIndex + 1) % state.animation.frames.length;
+        drawFrame(frameIndex);
+        scheduleNextFrame();
+      }, state.animation.frames[frameIndex].delay);
+    };
+    scheduleNextFrame();
+  }
 }
 
 function currentRecipeToken(layout) {
   const { cols, rows } = currentGrid();
   return encodeImageRecipe(
     createImageRecipe({
-      sourceWidth: state.image.naturalWidth,
-      sourceHeight: state.image.naturalHeight,
+      sourceWidth: sourceWidth(),
+      sourceHeight: sourceHeight(),
       sourceFrames: state.animation.frames.length,
       cols,
       rows,
@@ -479,12 +606,12 @@ function drawQr(context, token, x, y, size) {
 
 async function buildTransportImage() {
   const placeholderLayout = {
-    canvasWidth: state.image.naturalWidth,
-    canvasHeight: state.image.naturalHeight + 1,
+    canvasWidth: sourceWidth(),
+    canvasHeight: sourceHeight() + 1,
     sourceX: 0,
     sourceY: 0,
-    sourceWidth: state.image.naturalWidth,
-    sourceHeight: state.image.naturalHeight,
+    sourceWidth: sourceWidth(),
+    sourceHeight: sourceHeight(),
   };
   const placeholderToken = currentRecipeToken(placeholderLayout);
   const qrModules = QRCode.create(placeholderToken, {
@@ -492,8 +619,8 @@ async function buildTransportImage() {
   }).modules.size;
   const qrSize = qrSizeForModules(qrModules);
   const layout = transportLayoutForSource(
-    state.image.naturalWidth,
-    state.image.naturalHeight,
+    sourceWidth(),
+    sourceHeight(),
     qrSize,
   );
   const recipeToken = currentRecipeToken(layout);
@@ -714,5 +841,7 @@ window.addEventListener('paste', (event) => {
 });
 
 window.addEventListener('resize', () => {
-  if (state.image) drawEditor();
+  if (!state.image) return;
+  drawEditor();
+  renderOutputPreview();
 });

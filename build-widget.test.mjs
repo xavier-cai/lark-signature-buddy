@@ -23,4 +23,8 @@ test('build embeds bundle replacement tokens literally', async () => {
   );
   assert.equal(output.match(/<script type="module">/g)?.length, 1);
   assert.equal(output.match(/<\/script>/g)?.length, 1);
+  assert.match(output, /id="frame-picker"/);
+  assert.match(output, /id="animation-badge"/);
+  assert.match(output, /选择裁剪参考帧/);
+  assert.doesNotMatch(output, /src="\.\/app\.js"/);
 });

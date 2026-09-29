@@ -80,6 +80,23 @@
             <p class="field-hint">每项可输入 1–15，最多一次复制 225 张。</p>
           </section>
 
+          <section class="control-section frame-section" id="frame-section" hidden>
+            <div class="section-heading">
+              <div>
+                <p class="step-label">动图帧</p>
+                <h2>选择裁剪参考帧</h2>
+              </div>
+              <span class="frame-count" id="frame-count"></span>
+            </div>
+            <p class="field-hint">点击任一帧切换左侧画面；裁剪范围会应用到全部帧。</p>
+            <div
+              class="frame-picker"
+              id="frame-picker"
+              role="listbox"
+              aria-label="动图帧"
+            ></div>
+          </section>
+
           <section class="control-section">
             <p class="step-label">模式</p>
             <div class="mode-options" id="mode-options">
@@ -114,6 +131,10 @@
                 <p class="step-label">预览</p>
                 <h2>最终组合效果</h2>
               </div>
+              <span class="animation-badge" id="animation-badge" hidden>
+                <span aria-hidden="true"></span>
+                动图预览
+              </span>
             </div>
             <div class="output-preview" id="output-preview">
               <span>选择图片后显示</span>
