@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>图片仔 · 飞书图片上传</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <div>
+          <p class="eyebrow">IMAGE BUDDY</p>
+          <h1>把图片变成飞书 Image Key</h1>
+          <p class="intro">选择、拖入或粘贴图片。上传完成后，可直接复制 Key 或生成妙笔链接。</p>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <div class="upload-column">
+          <button class="drop-zone" id="drop-zone" type="button">
+            <span class="upload-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img">
+                <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v3.2A2.8 2.8 0 0 0 7.8 20h8.4a2.8 2.8 0 0 0 2.8-2.8V14" />
+              </svg>
+            </span>
+            <strong>拖入图片，或点击选择</strong>
+            <span>也可以直接粘贴剪贴板中的图片</span>
+            <small>JPG · PNG · WEBP · GIF · BMP · ICO · TIFF · HEIC，最大 10 MB</small>
+          </button>
+          <input
+            id="file-input"
+            type="file"
+            accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.ico,.tif,.tiff,.heic,image/*"
+            hidden
+          />
+
+          <article class="preview-card" id="preview-card" hidden>
+            <div class="preview-frame">
+              <img id="preview-image" alt="待上传图片预览" />
+            </div>
+            <div class="file-meta">
+              <strong id="file-name"></strong>
+              <span id="file-detail"></span>
+            </div>
+            <button class="quiet-button" id="replace-button" type="button">换一张</button>
+          </article>
+
+          <div class="notice" id="notice" role="status" aria-live="polite"></div>
+          <button class="primary-button" id="upload-button" type="button" disabled>
+            <span id="upload-label">选择图片后上传</span>
+            <span class="spinner" id="spinner" hidden aria-hidden="true"></span>
+          </button>
+        </div>
+
+        <aside class="result-panel" id="result-panel">
+          <div class="result-empty" id="result-empty">
+            <span class="result-orbit" aria-hidden="true"></span>
+            <strong>结果会出现在这里</strong>
+            <p>上传完成后，Image Key 和妙笔链接都可以一键复制。</p>
+          </div>
+
+          <div class="result-content" id="result-content" hidden>
+            <div class="success-badge">上传成功</div>
+            <label for="image-key">Image Key</label>
+            <div class="copy-row">
+              <input id="image-key" readonly />
+              <button class="copy-button" data-copy-target="image-key" type="button">复制</button>
+            </div>
+
+            <div class="divider"></div>
+
+            <label for="link-title">链接标题</label>
+            <input id="link-title" class="field" placeholder="例如：今天也要勇攀高峰" />
+
+            <label for="target-url">跳转地址 <span>可选</span></label>
+            <input id="target-url" class="field" type="url" placeholder="https://..." />
+
+            <label for="magic-link">妙笔链接</label>
+            <div class="copy-row">
+              <textarea id="magic-link" rows="3" readonly></textarea>
+              <button class="copy-button" data-copy-target="magic-link" type="button">复制</button>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <footer>
+        <span class="status-dot"></span>
+        <span>由本机 image-buddy 服务上传；应用密钥不会进入浏览器。</span>
+      </footer>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

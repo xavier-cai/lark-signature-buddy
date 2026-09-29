@@ -1,0 +1,14 @@
+{
+  "name": "image-buddy-local",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local, iframe-friendly image uploader for Lark image keys.",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
