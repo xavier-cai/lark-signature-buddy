@@ -2,6 +2,7 @@ import {
   createImageRecipe,
   encodeImageRecipe,
 } from './image-recipe.js';
+import QRCode from 'qrcode';
 import {
   compositionUnits,
   fitCrop,
@@ -13,7 +14,11 @@ import {
   isAnimatedImageBytes,
   validateStaticImageSize,
 } from './image-format.js';
-import { embedRecipeInPng } from './png-recipe.js';
+import {
+  QR_LABEL_HEIGHT,
+  QR_MARGIN,
+  transportLayoutForSource,
+} from './transport-core.js';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const HANDLE_RADIUS = 9;
@@ -41,6 +46,10 @@ const notice = document.querySelector('#notice');
 const generateButton = document.querySelector('#generate-button');
 const generateLabel = document.querySelector('#generate-label');
 const spinner = document.querySelector('#spinner');
+const transportDebug = document.querySelector('#transport-debug');
+const transportDetail = document.querySelector('#transport-detail');
+const transportPreview = document.querySelector('#transport-preview');
+const transportDownload = document.querySelector('#transport-download');
 
 const state = {
   file: null,
@@ -56,10 +65,10 @@ const state = {
 
 function updateCopyLabel() {
   if (!state.image) {
-    generateLabel.textContent = '选择图片后即可复制含参数原图';
+    generateLabel.textContent = '选择图片后即可生成带 QR 图片';
     return;
   }
-  generateLabel.textContent = '复制含参数原图 PNG';
+  generateLabel.textContent = '复制原图 + QR 参数条';
 }
 
 function formatBytes(size) {
@@ -152,6 +161,7 @@ async function chooseFile(file) {
     canvasStage.hidden = false;
     resetGridButton.disabled = false;
     generateButton.disabled = false;
+    transportDebug.hidden = true;
     updateCopyLabel();
     resetCrop();
   };
@@ -415,7 +425,7 @@ function renderOutputPreview() {
   outputPreview.replaceChildren(preview);
 }
 
-function currentRecipeToken() {
+function currentRecipeToken(layout) {
   const { cols, rows } = currentGrid();
   return encodeImageRecipe(
     createImageRecipe({
@@ -427,42 +437,84 @@ function currentRecipeToken() {
       mode: state.mode,
       gapRatio: state.gapRatio,
       outputSize: OUTPUT_SIZE,
+      contentRect: {
+        x: layout.sourceX / layout.canvasWidth,
+        y: layout.sourceY / layout.canvasHeight,
+        width: layout.sourceWidth / layout.canvasWidth,
+        height: layout.sourceHeight / layout.canvasHeight,
+      },
     }),
   );
 }
 
-function dataUrlToBytes(dataUrl) {
-  const encoded = dataUrl.slice(dataUrl.indexOf(',') + 1);
-  return Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+function drawQr(context, token, x, y, size) {
+  const qr = QRCode.create(token, { errorCorrectionLevel: 'H' });
+  const margin = 4;
+  const cells = qr.modules.size + margin * 2;
+  const scale = Math.max(1, Math.floor(size / cells));
+  const renderedSize = cells * scale;
+  const left = x + Math.floor((size - renderedSize) / 2);
+  const top = y + Math.floor((size - renderedSize) / 2);
+  context.fillStyle = '#ffffff';
+  context.fillRect(x, y, size, size);
+  context.fillStyle = '#000000';
+  for (let row = 0; row < qr.modules.size; row += 1) {
+    for (let col = 0; col < qr.modules.size; col += 1) {
+      if (!qr.modules.get(row, col)) continue;
+      context.fillRect(
+        left + (col + margin) * scale,
+        top + (row + margin) * scale,
+        scale,
+        scale,
+      );
+    }
+  }
 }
 
-function bytesToDataUrl(bytes) {
-  const chunkSize = 32768;
-  const chunks = [];
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    chunks.push(
-      String.fromCharCode(...bytes.subarray(offset, offset + chunkSize)),
-    );
-  }
-  return `data:image/png;base64,${btoa(chunks.join(''))}`;
+function dataUrlToBlob(dataUrl) {
+  const [metadata, encoded] = dataUrl.split(',');
+  const mime = /data:([^;]+)/.exec(metadata)?.[1] || 'image/png';
+  const bytes = Uint8Array.from(atob(encoded), (character) =>
+    character.charCodeAt(0),
+  );
+  return new Blob([bytes], { type: mime });
 }
 
 function buildTransportImage() {
+  const layout = transportLayoutForSource(
+    state.image.naturalWidth,
+    state.image.naturalHeight,
+  );
+  const recipeToken = currentRecipeToken(layout);
   const canvas = document.createElement('canvas');
-  canvas.width = state.image.naturalWidth;
-  canvas.height = state.image.naturalHeight;
+  canvas.width = layout.canvasWidth;
+  canvas.height = layout.canvasHeight;
   const context = canvas.getContext('2d');
-  context.drawImage(state.image, 0, 0);
-  const pngBytes = dataUrlToBytes(canvas.toDataURL('image/png'));
-  if (pngBytes.length > 20 * 1024 * 1024) {
-    throw new Error('转换后的 PNG 超过 20 MB，请缩小图片后重试');
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(state.image, layout.sourceX, layout.sourceY);
+  context.fillStyle = '#1f2937';
+  context.font = '600 16px system-ui, sans-serif';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText(
+    'IMAGE BUDDY · V1',
+    layout.canvasWidth / 2,
+    layout.sourceHeight + QR_MARGIN + QR_LABEL_HEIGHT / 2,
+  );
+  drawQr(
+    context,
+    recipeToken,
+    Math.round((layout.canvasWidth - layout.qrSize) / 2),
+    layout.sourceHeight + QR_MARGIN + QR_LABEL_HEIGHT,
+    layout.qrSize,
+  );
+  const dataUrl = canvas.toDataURL('image/png');
+  const blob = dataUrlToBlob(dataUrl);
+  if (blob.size > 20 * 1024 * 1024) {
+    throw new Error('传输 PNG 超过 20 MB，请缩小图片后重试');
   }
-  const encoded = embedRecipeInPng(pngBytes, currentRecipeToken());
-  const blob = new Blob([encoded], { type: 'image/png' });
-  return {
-    blob,
-    dataUrl: bytesToDataUrl(encoded),
-  };
+  return { blob, dataUrl, layout, recipeToken };
 }
 
 function legacyCopyImage(imageUrl) {
@@ -514,16 +566,23 @@ async function copyImageRecipe() {
   spinner.hidden = false;
   setNotice();
   try {
-    const { blob, dataUrl } = buildTransportImage();
+    const { blob, dataUrl, layout, recipeToken } = buildTransportImage();
+    transportPreview.src = dataUrl;
+    transportDownload.href = dataUrl;
+    transportDetail.textContent =
+      `${layout.canvasWidth} × ${layout.canvasHeight} · ${recipeToken.length} 字符`;
+    transportDebug.hidden = false;
     const legacyCopied = legacyCopyImage(dataUrl);
     const clipboardPromise = startAsyncCopyImage(blob);
-    const copied = clipboardPromise
-      ? (await clipboardPromise) || legacyCopied
-      : legacyCopied;
+    const nativeCopied = clipboardPromise ? await clipboardPromise : false;
+    const copied = nativeCopied || legacyCopied;
     if (!copied) {
       throw new Error('当前飞书文档不允许复制图片');
     }
-    setNotice('已复制含切图参数的原图 PNG，请粘贴发送给图片仔验证', 'success');
+    setNotice(
+      `已通过${nativeCopied ? '原生 PNG 剪贴板' : '兼容模式'}复制带 QR 图片，请粘贴发送给图片仔`,
+      'success',
+    );
   } catch (error) {
     setNotice(error.message || '复制失败，请稍后重试。');
   } finally {

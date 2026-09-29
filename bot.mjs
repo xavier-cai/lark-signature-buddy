@@ -81,8 +81,22 @@ async function replyToBatch(batchKey) {
         runLark,
       });
       const decoded = await decodeRecipeFromImage(input);
+      log('info', 'decoded image recipe', {
+        messageId: image.messageId,
+        imageKey: image.imageKey,
+        transportWidth: decoded.image.width,
+        transportHeight: decoded.image.height,
+        tokenLength: decoded.token.length,
+        cols: decoded.recipe.grid.cols,
+        rows: decoded.recipe.grid.rows,
+      });
       text = formatRecipeReceipt([image.imageKey], decoded.recipe, decoded.image);
     } catch (error) {
+      log('warn', 'failed to decode image recipe', {
+        messageId: image.messageId,
+        imageKey: image.imageKey,
+        error: error.message,
+      });
       text = `切图请求读取失败：${error.message}`;
     }
   }

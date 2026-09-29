@@ -15,7 +15,7 @@
           <div>
             <p class="eyebrow">IMAGE BUDDY</p>
             <h1>网格切图与图片仔</h1>
-            <p class="intro">同屏调整选区、网格和间隔预裁剪，把参数内嵌进原图 PNG 后粘贴给图片仔。</p>
+            <p class="intro">同屏调整选区、网格和间隔预裁剪，生成带底部 QR 参数条的单张图片。</p>
           </div>
         </div>
         <button class="upload-button" id="upload-button" type="button">
@@ -122,15 +122,23 @@
 
           <div class="notice" id="notice" role="status" aria-live="polite"></div>
           <button class="generate-button" id="generate-button" type="button" disabled>
-            <span id="generate-label">选择图片后即可复制含参数原图</span>
+            <span id="generate-label">选择图片后即可生成带 QR 图片</span>
             <span class="spinner" id="spinner" hidden aria-hidden="true"></span>
           </button>
+          <section class="transport-debug" id="transport-debug" hidden>
+            <div>
+              <strong>本次实际复制的传输图</strong>
+              <span id="transport-detail"></span>
+            </div>
+            <img id="transport-preview" alt="带底部 QR 参数条的传输图" />
+            <a id="transport-download" download="image-buddy-transport.png">下载传输 PNG 检查</a>
+          </section>
         </aside>
       </section>
 
       <footer>
         <span class="status-dot"></span>
-        <span>选区参数内嵌在 PNG 文件中；复制后直接粘贴发送给图片仔 Bot。</span>
+        <span>窄图自动左右补白；复制带底部 QR 参数条的 PNG 后发送给图片仔 Bot。</span>
       </footer>
     </main>
 

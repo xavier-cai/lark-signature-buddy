@@ -1,19 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import QRCode from 'qrcode';
+import sharp from 'sharp';
+
 import { decodeRecipeFromImage } from './bot-image.mjs';
 import {
   eventBatchKey,
   extractImageKeys,
-  extractImageRecipe,
   formatRecipeReceipt,
-  formatReply,
 } from './bot-core.mjs';
 import {
   createImageRecipe,
   decodeImageRecipe,
   encodeImageRecipe,
-  extractImageRecipeTokens,
 } from './public/image-recipe.js';
 import {
   compositionUnits,
@@ -27,9 +27,10 @@ import {
   validateStaticImageSize,
 } from './public/image-format.js';
 import {
-  embedRecipeInPng,
-  extractRecipeFromPng,
-} from './public/png-recipe.js';
+  QR_LABEL_HEIGHT,
+  QR_MARGIN,
+  transportLayoutForSource,
+} from './public/transport-core.js';
 
 test('parses supported grids', () => {
   assert.deepEqual(parseGrid('2x3'), { cols: 2, rows: 3 });
@@ -146,23 +147,22 @@ test('groups image messages by chat, sender, and thread context', () => {
   );
 });
 
-test('formats keys and complete magic links', () => {
-  const reply = formatReply(['img_v3_one', 'img_v3_two']);
-  assert.match(reply, /收到 2 张图片/);
-  assert.match(reply, /1\. img_v3_one/);
-  assert.match(reply, /https:\/\/magic\.solutionsuite\.cn\/r\?k=img_v3_one/);
-  assert.match(reply, /2\. img_v3_two/);
-});
-
+const layout = transportLayoutForSource(80, 100);
 const recipe = createImageRecipe({
-  sourceWidth: 1600,
-  sourceHeight: 900,
+  sourceWidth: 80,
+  sourceHeight: 100,
   cols: 3,
   rows: 2,
   crop: { x: 0.1, y: 0.2, width: 0.75, height: 0.6 },
   mode: 'precut',
   gapRatio: 0.58,
   outputSize: 512,
+  contentRect: {
+    x: layout.sourceX / layout.canvasWidth,
+    y: layout.sourceY / layout.canvasHeight,
+    width: layout.sourceWidth / layout.canvasWidth,
+    height: layout.sourceHeight / layout.canvasHeight,
+  },
 });
 
 test('round-trips the shared V1 image recipe', () => {
@@ -170,17 +170,6 @@ test('round-trips the shared V1 image recipe', () => {
   assert.match(token, /^IB1:[A-Za-z0-9_-]+$/);
   assert.ok(token.length <= 64);
   assert.deepEqual(decodeImageRecipe(token), recipe);
-});
-
-test('extracts a recipe from nested Lark message content', () => {
-  const token = encodeImageRecipe(recipe);
-  const content = JSON.stringify({
-    zh_cn: {
-      content: [[{ tag: 'text', text: token }]],
-    },
-  });
-  assert.deepEqual(extractImageRecipeTokens(content), [token]);
-  assert.deepEqual(extractImageRecipe(content), recipe);
 });
 
 test('strictly rejects recipe version mismatches and extra fields', () => {
@@ -212,39 +201,64 @@ test('formats a validated recipe receipt for one source image', () => {
   );
 });
 
-const tinyPng = Uint8Array.from(
-  Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
-    'base64',
-  ),
-);
-
-test('embeds and extracts a recipe from PNG metadata without changing dimensions', async () => {
-  const tinyRecipe = createImageRecipe({
-    sourceWidth: 1,
-    sourceHeight: 1,
-    cols: 1,
-    rows: 1,
-    crop: { x: 0, y: 0, width: 1, height: 1 },
-    mode: 'plain',
-    gapRatio: 0,
-    outputSize: 512,
+test('pads a narrow image and decodes its QR recipe end to end', async () => {
+  assert.deepEqual(layout, {
+    canvasWidth: 384,
+    canvasHeight: 436,
+    sourceX: 152,
+    sourceY: 0,
+    sourceWidth: 80,
+    sourceHeight: 100,
+    footerHeight: 336,
+    qrSize: 256,
   });
-  const token = encodeImageRecipe(tinyRecipe);
-  const encoded = embedRecipeInPng(tinyPng, token);
-  assert.equal(extractRecipeFromPng(encoded), token);
-  assert.ok(encoded.length > tinyPng.length);
-  const decoded = await decodeRecipeFromImage(encoded);
-  assert.deepEqual(decoded.recipe, tinyRecipe);
+
+  const qr = await QRCode.toBuffer(encodeImageRecipe(recipe), {
+    type: 'png',
+    width: layout.qrSize,
+    margin: 4,
+    errorCorrectionLevel: 'H',
+  });
+  const source = await sharp({
+    create: {
+      width: layout.sourceWidth,
+      height: layout.sourceHeight,
+      channels: 4,
+      background: '#4f70d8',
+    },
+  })
+    .png()
+    .toBuffer();
+  const transport = await sharp({
+    create: {
+      width: layout.canvasWidth,
+      height: layout.canvasHeight,
+      channels: 4,
+      background: '#ffffff',
+    },
+  })
+    .composite([
+      { input: source, left: layout.sourceX, top: layout.sourceY },
+      {
+        input: qr,
+        left: Math.round((layout.canvasWidth - layout.qrSize) / 2),
+        top: layout.sourceHeight + QR_MARGIN + QR_LABEL_HEIGHT,
+      },
+    ])
+    .png()
+    .toBuffer();
+  const decoded = await decodeRecipeFromImage(transport);
+  assert.deepEqual(decoded.recipe, recipe);
   assert.deepEqual(decoded.image, {
-    width: 1,
-    height: 1,
+    width: 384,
+    height: 436,
     format: 'png',
   });
 });
 
-test('rejects PNGs without metadata and invalid image dimensions', async () => {
-  await assert.rejects(() => decodeRecipeFromImage(tinyPng), /未找到 ImageBuddy/);
+test('rejects transport canvases beyond the V1 resource limits', () => {
+  assert.throws(() => transportLayoutForSource(8192, 8192), /32 MP/);
+  assert.throws(() => transportLayoutForSource(9000, 10), /8192 px/);
   assert.throws(() => validateStaticImageSize(8192, 8192), /32 MP/);
   assert.throws(() => validateStaticImageSize(9000, 10), /8192 px/);
 });
