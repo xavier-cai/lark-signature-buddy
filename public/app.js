@@ -88,7 +88,7 @@ function updateCopyLabel() {
   }
   const mappingLabel = state.colorMapping ? '色彩映射' : '原始色彩';
   generateLabel.textContent = state.animation?.frames.length > 1
-    ? `生成并复制 ${mappingLabel} APNG 动图`
+    ? `生成并下载 ${mappingLabel} APNG 动图`
     : `生成并复制 ${mappingLabel} PNG 图片`;
 }
 
@@ -784,6 +784,14 @@ async function copyImageRecipe() {
     transportDetail.textContent =
       `${layout.canvasWidth} × ${layout.canvasHeight} · ${state.animation.frames.length} 帧 · ${state.colorMapping ? '色彩映射' : '原始色彩'} · ${recipeToken.length} 字符`;
     transportDebug.hidden = false;
+    if (isAnimated()) {
+      transportDownload.click();
+      setNotice(
+        'APNG 已下载；请把下载文件作为图片或文件上传给图片仔。不要复制粘贴，剪贴板会丢失动图帧。',
+        'success',
+      );
+      return;
+    }
     const clipboardPromise = startAsyncCopyImage(blob);
     const nativeCopied = clipboardPromise ? await clipboardPromise : false;
     if (!nativeCopied) {
