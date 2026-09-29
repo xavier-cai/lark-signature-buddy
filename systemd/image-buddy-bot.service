@@ -1,0 +1,20 @@
+[Unit]
+Description=Image Buddy Lark bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/workspace/opensource/image-buddy-local
+Environment=PATH=%h/.ai-devbox/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=IMAGE_BUDDY_PROFILE=image-buddy
+Environment=IMAGE_BUDDY_BATCH_DELAY_MS=1500
+Environment=IMAGE_BUDDY_MAX_BATCH_MS=5000
+ExecStart=/usr/bin/node %h/workspace/opensource/image-buddy-local/bot.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

@@ -3,11 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local, iframe-friendly image uploader for Lark image keys.",
+  "description": "Offline Lark document image slicer with a companion Image Key bot.",
   "scripts": {
     "build:widget": "node build-widget.mjs",
     "start:bot": "node bot.mjs",
-    "start": "node server.mjs",
     "test": "node --test"
   },
   "engines": {
