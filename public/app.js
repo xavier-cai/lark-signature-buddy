@@ -127,7 +127,7 @@ function chooseFile(file) {
     canvasStage.hidden = false;
     resetGridButton.disabled = false;
     generateButton.disabled = false;
-    generateLabel.textContent = `生成并复制 ${currentGrid().cols * currentGrid().rows} 张`;
+    generateLabel.textContent = `复制 ${currentGrid().cols * currentGrid().rows} 张切图`;
     resetCrop();
     results.hidden = true;
   };
@@ -475,17 +475,17 @@ async function generateTiles() {
       renderResults(generated);
       results.hidden = false;
       if (legacyCopyImages(generated)) {
-        setNotice(`已生成并复制 ${generated.length} 张图片，直接粘贴给图片仔`, 'success');
+        setNotice(`已复制 ${generated.length} 张切图，直接粘贴给图片仔`, 'success');
       } else {
         openCopyDialog(0);
-        setNotice('已生成切图，但 iframe 未授权自动复制；请在弹窗中逐张复制');
+        setNotice('iframe 未授权批量复制，切图已准备好，请在弹窗中逐张复制');
       }
       return;
     }
 
     spinner.hidden = false;
     for (let index = 0; index < tiles.length; index += 1) {
-      generateLabel.textContent = `正在生成 ${index + 1} / ${tiles.length}`;
+      generateLabel.textContent = `正在准备 ${index + 1} / ${tiles.length}`;
       const canvas = renderTileCanvas(tiles[index]);
       const blob = await canvasToBlob(canvas);
       generated.push({ blob, index, objectUrl: URL.createObjectURL(blob), dataUrl: null });
@@ -495,13 +495,13 @@ async function generateTiles() {
     renderResults(generated);
     results.hidden = false;
     openCopyDialog(0);
-    setNotice(`已生成 ${generated.length} 张图片；数量较多，请使用逐张复制队列`);
+    setNotice(`已准备 ${generated.length} 张切图；数量较多，请使用逐张复制队列`);
   } catch (error) {
     setNotice(error.message || '生成失败，请稍后重试。');
   } finally {
     spinner.hidden = true;
     generateButton.disabled = false;
-    generateLabel.textContent = `生成并复制 ${tiles.length} 张`;
+    generateLabel.textContent = `复制 ${tiles.length} 张切图`;
   }
 }
 
@@ -694,8 +694,8 @@ function setGrid(cols, rows) {
   const grid = currentGrid();
   tileCount.textContent = `${grid.cols * grid.rows} 张`;
   generateLabel.textContent = state.image
-    ? `生成并复制 ${grid.cols * grid.rows} 张`
-    : '选择图片后复制';
+    ? `复制 ${grid.cols * grid.rows} 张切图`
+    : '选择图片后即可复制';
   if (state.image) resetCrop();
 }
 
