@@ -63,3 +63,25 @@ export function formatRecipeReceipt(imageKeys, recipe, transportImage = null) {
   }
   return lines.join('\n');
 }
+
+export function formatGeneratedReply(imageKeys, recipe) {
+  const expected = recipe.grid.cols * recipe.grid.rows;
+  if (imageKeys.length !== expected) {
+    throw new Error(
+      `切片结果数量异常：期望 ${expected} 张，实际 ${imageKeys.length} 张`,
+    );
+  }
+  const lines = [
+    `切图完成：${recipe.grid.cols} × ${recipe.grid.rows}，共 ${expected} 张。`,
+    '顺序：从左到右、从上到下。',
+    '',
+  ];
+  imageKeys.forEach((key, index) => {
+    lines.push(`${index + 1}. ${key}`);
+    lines.push(
+      `https://magic.solutionsuite.cn/r?k=${encodeURIComponent(key)}`,
+    );
+    if (index < imageKeys.length - 1) lines.push('');
+  });
+  return lines.join('\n');
+}

@@ -6,8 +6,14 @@ import sharp from 'sharp';
 
 import { decodeRecipeFromImage } from './bot-image.mjs';
 import {
+  buildTileSpecs,
+  generateAndUploadTiles,
+  renderTile,
+} from './bot-tiles.mjs';
+import {
   eventBatchKey,
   extractImageKeys,
+  formatGeneratedReply,
   formatRecipeReceipt,
 } from './bot-core.mjs';
 import {
@@ -201,6 +207,22 @@ test('formats a validated recipe receipt for one source image', () => {
   );
 });
 
+test('formats generated image keys and magic links in row-major order', () => {
+  const keys = Array.from({ length: 6 }, (_, index) => `img_tile_${index + 1}`);
+  const reply = formatGeneratedReply(keys, recipe);
+  assert.match(reply, /切图完成：3 × 2，共 6 张/);
+  assert.match(reply, /1\. img_tile_1/);
+  assert.match(
+    reply,
+    /https:\/\/magic\.solutionsuite\.cn\/r\?k=img_tile_1/,
+  );
+  assert.match(reply, /6\. img_tile_6/);
+  assert.throws(
+    () => formatGeneratedReply(keys.slice(0, 5), recipe),
+    /期望 6 张，实际 5 张/,
+  );
+});
+
 test('pads a narrow image and decodes its QR recipe end to end', async () => {
   assert.deepEqual(layout, {
     canvasWidth: 384,
@@ -254,6 +276,69 @@ test('pads a narrow image and decodes its QR recipe end to end', async () => {
     height: 436,
     format: 'png',
   });
+
+  const specs = buildTileSpecs(decoded.recipe, decoded.image);
+  assert.equal(specs.length, 6);
+  assert.deepEqual(
+    specs.map(({ row, col }) => [row, col]),
+    [
+      [0, 0],
+      [0, 1],
+      [0, 2],
+      [1, 0],
+      [1, 1],
+      [1, 2],
+    ],
+  );
+  for (const spec of specs) {
+    assert.ok(spec.left >= layout.sourceX);
+    assert.ok(spec.top >= layout.sourceY);
+    assert.ok(spec.left + spec.width <= layout.sourceX + layout.sourceWidth);
+    assert.ok(spec.top + spec.height <= layout.sourceY + layout.sourceHeight);
+  }
+  const firstTile = await renderTile(transport, specs[0]);
+  const firstMetadata = await sharp(firstTile).metadata();
+  assert.equal(firstMetadata.width, 512);
+  assert.equal(firstMetadata.height, 512);
+});
+
+test('uploads rendered tiles concurrently while preserving result order', async () => {
+  const source = await sharp({
+    create: {
+      width: layout.canvasWidth,
+      height: layout.canvasHeight,
+      channels: 4,
+      background: '#ffffff',
+    },
+  })
+    .png()
+    .toBuffer();
+  const calls = [];
+  const keys = await generateAndUploadTiles({
+    input: source,
+    recipe,
+    transportImage: {
+      width: layout.canvasWidth,
+      height: layout.canvasHeight,
+      format: 'png',
+    },
+    profile: 'test-profile',
+    concurrency: 3,
+    runLark: async (args) => {
+      const fileArg = args[args.indexOf('--file') + 1];
+      const match = /tile-(\d+)\.png$/.exec(fileArg);
+      assert.ok(match);
+      const number = Number(match[1]);
+      calls.push(number);
+      await new Promise((resolve) => setTimeout(resolve, (7 - number) * 2));
+      return { data: { image_key: `img_generated_${number}` } };
+    },
+  });
+  assert.deepEqual(
+    keys,
+    Array.from({ length: 6 }, (_, index) => `img_generated_${index + 1}`),
+  );
+  assert.equal(calls.length, 6);
 });
 
 test('rejects transport canvases beyond the V1 resource limits', () => {

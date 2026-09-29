@@ -6,12 +6,13 @@ import process from 'node:process';
 import {
   eventBatchKey,
   extractImageKeys,
-  formatRecipeReceipt,
+  formatGeneratedReply,
 } from './bot-core.mjs';
 import {
   decodeRecipeFromImage,
   downloadMessageImage,
 } from './bot-image.mjs';
+import { generateAndUploadTiles } from './bot-tiles.mjs';
 
 const PROFILE = process.env.IMAGE_BUDDY_PROFILE || 'image-buddy';
 const DEBOUNCE_MS = Number.parseInt(process.env.IMAGE_BUDDY_BATCH_DELAY_MS || '1500', 10);
@@ -67,6 +68,12 @@ function userFacingDecodeError(error) {
   ) {
     return '图片仔应用缺少 im:message:readonly 权限，暂时无法下载图片进行扫码。';
   }
+  if (
+    error.message.includes('im:resource') ||
+    error.message.includes('im:resource:upload')
+  ) {
+    return '图片仔应用缺少 im:resource 权限，暂时无法上传切片。';
+  }
   return error.message;
 }
 
@@ -100,9 +107,21 @@ async function replyToBatch(batchKey) {
         cols: decoded.recipe.grid.cols,
         rows: decoded.recipe.grid.rows,
       });
-      text = formatRecipeReceipt([image.imageKey], decoded.recipe, decoded.image);
+      const generatedKeys = await generateAndUploadTiles({
+        input,
+        recipe: decoded.recipe,
+        transportImage: decoded.image,
+        profile: PROFILE,
+        runLark,
+      });
+      log('info', 'generated and uploaded image tiles', {
+        messageId: image.messageId,
+        sourceImageKey: image.imageKey,
+        imageCount: generatedKeys.length,
+      });
+      text = formatGeneratedReply(generatedKeys, decoded.recipe);
     } catch (error) {
-      log('warn', 'failed to decode image recipe', {
+      log('warn', 'failed to process image recipe', {
         messageId: image.messageId,
         imageKey: image.imageKey,
         error: error.message,
