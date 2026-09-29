@@ -94,7 +94,7 @@ npm run start:bot
 - `IMAGE_BUDDY_MAX_BATCH_MS`：单批最长等待，默认 `5000`
 
 应用需启用机器人能力，订阅 `im.message.receive_v1`，并开通单聊/群聊接收消息和
-`im:message:send_as_bot`、`im:resource` 权限。
+`im:message:send_as_bot`、`im:message:readonly`、`im:resource` 权限。
 
 ## systemd 常驻
 
