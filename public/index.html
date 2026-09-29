@@ -98,6 +98,24 @@
           </section>
 
           <section class="control-section">
+            <div class="mapping-control">
+              <div>
+                <p class="step-label">色彩映射</p>
+                <strong>适配链接预览色彩空间</strong>
+                <small>将 RGB 映射为明度与透明度，默认应用到最终传输图</small>
+              </div>
+              <label class="switch-control">
+                <input id="color-mapping" type="checkbox" checked />
+                <span aria-hidden="true"></span>
+                <em>开启</em>
+              </label>
+            </div>
+            <p class="mapping-warning" id="mapping-warning" hidden>
+              GIF 不支持半透明，输出时会用透明度抖动近似映射效果。
+            </p>
+          </section>
+
+          <section class="control-section">
             <p class="step-label">模式</p>
             <div class="mode-options" id="mode-options">
               <label class="mode-card">

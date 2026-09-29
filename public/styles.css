@@ -392,6 +392,97 @@ h2 {
   line-height: 1.4;
 }
 
+.mapping-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.mapping-control > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mapping-control strong {
+  font-size: 14px;
+}
+
+.mapping-control small {
+  color: #7b8190;
+  line-height: 1.45;
+}
+
+.switch-control {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: 42px;
+  gap: 4px;
+  place-items: center;
+  cursor: pointer;
+}
+
+.switch-control input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.switch-control > span {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: #c8ccd5;
+  transition: background 160ms ease;
+}
+
+.switch-control > span::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 5px rgba(23, 31, 51, 0.25);
+  content: "";
+  transition: transform 160ms ease;
+}
+
+.switch-control input:checked + span {
+  background: #2866f6;
+}
+
+.switch-control input:checked + span::after {
+  transform: translateX(18px);
+}
+
+.switch-control input:focus-visible + span {
+  outline: 3px solid rgba(40, 102, 246, 0.22);
+  outline-offset: 2px;
+}
+
+.switch-control em {
+  color: #697080;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 750;
+}
+
+.mapping-warning {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 9px;
+  color: #8a6418;
+  background: #fff7df;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .animation-badge {
   display: inline-flex;
   align-items: center;
@@ -562,10 +653,53 @@ h2 {
   overflow: hidden;
 }
 
+.preview-comparison {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.preview-item {
+  min-width: 0;
+  margin: 0;
+  padding: 7px;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.preview-item.active {
+  border-color: #86a5f5;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.preview-item figcaption {
+  margin-bottom: 7px;
+  color: #596172;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.preview-item.mapped figcaption {
+  color: #2866f6;
+}
+
+.preview-item.active figcaption::after {
+  content: " · 输出";
+}
+
 .preview-composite {
   display: block;
+  width: 100% !important;
+  height: auto !important;
   max-width: 100%;
   max-height: 240px;
+  margin: 0 auto;
 }
 
 .notice {

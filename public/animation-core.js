@@ -123,6 +123,7 @@ export async function encodeGifFrames({
   height,
   frames,
   loop = 0,
+  ditherTransparency,
 }) {
   validateAnimationWork(width, height, frames.length);
   const output = await encodeGif({
@@ -136,6 +137,7 @@ export async function encodeGifFrames({
     })),
     maxColors: 255,
     dither: 'floyd-steinberg',
+    ditherTransparency,
   });
   return new Blob([output], { type: 'image/gif' });
 }

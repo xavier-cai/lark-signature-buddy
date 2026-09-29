@@ -15,6 +15,7 @@ import {
   encodeGifFrames,
   frameToCanvas,
 } from './animation-core.js';
+import { mapToLuminanceAlpha } from './color-mapping.js';
 import {
   QR_QUIET_ZONE_MODULES,
   QR_MIN_MODULE_PIXELS,
@@ -42,6 +43,8 @@ const tileCount = document.querySelector('#tile-count');
 const frameSection = document.querySelector('#frame-section');
 const frameCount = document.querySelector('#frame-count');
 const framePicker = document.querySelector('#frame-picker');
+const colorMappingInput = document.querySelector('#color-mapping');
+const mappingWarning = document.querySelector('#mapping-warning');
 const modeOptions = document.querySelector('#mode-options');
 const gapControl = document.querySelector('#gap-control');
 const gapRatioInput = document.querySelector('#gap-ratio');
@@ -64,8 +67,11 @@ const state = {
   animation: null,
   selectedFrame: 0,
   frameCanvas: null,
+  mappedFrameCanvas: null,
+  mappedFrameData: null,
   previewTimer: null,
   previewGeneration: 0,
+  colorMapping: true,
   grid: '2x2',
   mode: 'plain',
   gapRatio: 0.58,
@@ -80,8 +86,10 @@ function updateCopyLabel() {
     generateLabel.textContent = '选择图片后即可生成传输图片';
     return;
   }
-  generateLabel.textContent =
-    state.animation?.frames.length > 1 ? '生成并复制 GIF 动图' : '生成并复制 PNG 图片';
+  const mappingLabel = state.colorMapping ? '色彩映射' : '原始色彩';
+  generateLabel.textContent = state.animation?.frames.length > 1
+    ? `生成并复制 ${mappingLabel} GIF 动图`
+    : `生成并复制 ${mappingLabel} PNG 图片`;
 }
 
 function formatBytes(size) {
@@ -130,25 +138,37 @@ function sourceHeight() {
   return state.animation?.height || state.image?.naturalHeight || 0;
 }
 
-function sourceForFrame(index = state.selectedFrame) {
+function sourceForFrame(index = state.selectedFrame, mapped = false) {
   if (!state.animation) return state.image;
-  if (!state.frameCanvas) {
-    state.frameCanvas = document.createElement('canvas');
-    state.frameCanvas.width = state.animation.width;
-    state.frameCanvas.height = state.animation.height;
+  if (mapped && !state.mappedFrameData) {
+    state.mappedFrameData = new Uint8ClampedArray(
+      state.animation.frames[index].data.length,
+    );
   }
-  state.frameCanvas
+  const canvasKey = mapped ? 'mappedFrameCanvas' : 'frameCanvas';
+  if (!state[canvasKey]) {
+    state[canvasKey] = document.createElement('canvas');
+    state[canvasKey].width = state.animation.width;
+    state[canvasKey].height = state.animation.height;
+  }
+  const frameData = mapped
+    ? mapToLuminanceAlpha(
+      state.animation.frames[index].data,
+      state.mappedFrameData,
+    )
+    : state.animation.frames[index].data;
+  state[canvasKey]
     .getContext('2d')
     .putImageData(
       new ImageData(
-        state.animation.frames[index].data,
+        frameData,
         state.animation.width,
         state.animation.height,
       ),
       0,
       0,
     );
-  return state.frameCanvas;
+  return state[canvasKey];
 }
 
 function resetCrop() {
@@ -177,6 +197,7 @@ function renderFramePicker() {
   framePicker.replaceChildren();
   frameSection.hidden = !isAnimated();
   animationBadge.hidden = !isAnimated();
+  mappingWarning.hidden = !isAnimated();
   if (!isAnimated()) return;
 
   frameCount.textContent = `${state.animation.frames.length} 帧`;
@@ -263,6 +284,8 @@ async function chooseFile(file) {
     state.animation = animation;
     state.selectedFrame = 0;
     state.frameCanvas = null;
+    state.mappedFrameCanvas = null;
+    state.mappedFrameData = null;
     fileName.textContent = file.name || '粘贴的图片';
     fileDetail.textContent =
       `${image.naturalWidth} × ${image.naturalHeight} · ${animation.frames.length} 帧 · ${formatBytes(file.size)}`;
@@ -504,45 +527,72 @@ function renderOutputPreview() {
     return;
   }
   const { cols, rows } = currentGrid();
-  const width = Math.min(outputPreview.clientWidth - 28, 240);
+  const availableWidth = Math.max(188, outputPreview.clientWidth - 28);
+  const width = Math.min(
+    Math.max(80, Math.floor((availableWidth - 12) / 2)),
+    200,
+  );
   const { widthUnits, heightUnits } = compositionUnits(cols, rows, state.gapRatio);
   const tileSize = width / widthUnits;
   const gap = tileSize * state.gapRatio;
   const height = heightUnits * tileSize;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const preview = document.createElement('canvas');
-  preview.className = 'preview-composite';
-  preview.width = Math.round(width * dpr);
-  preview.height = Math.round(height * dpr);
-  preview.style.width = `${width}px`;
-  preview.style.height = `${height}px`;
-  const context = preview.getContext('2d');
-  context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  context.clearRect(0, 0, width, height);
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = 'high';
+  const comparison = document.createElement('div');
+  comparison.className = 'preview-comparison';
   const tiles = sourceTileRects();
+
+  const createPreview = (labelText, mapped) => {
+    const item = document.createElement('figure');
+    item.className = [
+      'preview-item',
+      mapped ? 'mapped' : 'original',
+      mapped === state.colorMapping ? 'active' : '',
+    ].filter(Boolean).join(' ');
+    const label = document.createElement('figcaption');
+    label.textContent = labelText;
+    const preview = document.createElement('canvas');
+    preview.className = 'preview-composite';
+    preview.width = Math.round(width * dpr);
+    preview.height = Math.round(height * dpr);
+    preview.style.width = `${width}px`;
+    preview.style.height = `${height}px`;
+    const context = preview.getContext('2d');
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    item.append(label, preview);
+    comparison.append(item);
+    return { context, mapped };
+  };
+  const previews = [
+    createPreview('原始色彩', false),
+    createPreview('色彩映射后', true),
+  ];
+
   const drawFrame = (frameIndex) => {
-    context.clearRect(0, 0, width, height);
-    const source = sourceForFrame(frameIndex);
-    for (const tile of tiles) {
-      const x = tile.col * (tileSize + gap);
-      const y = tile.row * (tileSize + gap);
-      context.drawImage(
-        source,
-        tile.x,
-        tile.y,
-        tile.width,
-        tile.height,
-        x,
-        y,
-        tileSize,
-        tileSize,
-      );
+    for (const preview of previews) {
+      const { context, mapped } = preview;
+      context.clearRect(0, 0, width, height);
+      const source = sourceForFrame(frameIndex, mapped);
+      for (const tile of tiles) {
+        const x = tile.col * (tileSize + gap);
+        const y = tile.row * (tileSize + gap);
+        context.drawImage(
+          source,
+          tile.x,
+          tile.y,
+          tile.width,
+          tile.height,
+          x,
+          y,
+          tileSize,
+          tileSize,
+        );
+      }
     }
   };
   drawFrame(0);
-  outputPreview.replaceChildren(preview);
+  outputPreview.replaceChildren(comparison);
   if (isAnimated()) {
     let frameIndex = 0;
     const scheduleNextFrame = () => {
@@ -555,6 +605,32 @@ function renderOutputPreview() {
     };
     scheduleNextFrame();
   }
+}
+
+function transportFrame(frame) {
+  if (!state.colorMapping) return frame;
+  return {
+    ...frame,
+    data: mapToLuminanceAlpha(frame.data),
+  };
+}
+
+function paintTransportFrame(context, frame, layout) {
+  if (!state.colorMapping) {
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, context.canvas.width, context.canvas.height);
+  } else {
+    context.clearRect(0, 0, context.canvas.width, context.canvas.height);
+  }
+  context.drawImage(
+    frameToCanvas(
+      transportFrame(frame),
+      layout.sourceWidth,
+      layout.sourceHeight,
+    ),
+    layout.sourceX,
+    layout.sourceY,
+  );
 }
 
 function currentRecipeToken(layout) {
@@ -629,13 +705,7 @@ async function buildTransportImage() {
     canvas.width = layout.canvasWidth;
     canvas.height = layout.canvasHeight;
     const context = canvas.getContext('2d');
-    context.fillStyle = '#ffffff';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(
-      frameToCanvas(frame, layout.sourceWidth, layout.sourceHeight),
-      layout.sourceX,
-      layout.sourceY,
-    );
+    paintTransportFrame(context, frame, layout);
     drawQr(
       context,
       recipeToken,
@@ -667,6 +737,7 @@ async function buildTransportImage() {
       height: layout.canvasHeight,
       frames,
       loop: state.animation.loop,
+      ditherTransparency: state.colorMapping ? 'floyd-steinberg' : undefined,
     });
   }
   if (blob.size > 20 * 1024 * 1024) {
@@ -712,7 +783,7 @@ async function copyImageRecipe() {
     const extension = blob.type === 'image/gif' ? 'gif' : 'png';
     transportDownload.download = `image-buddy-transport.${extension}`;
     transportDetail.textContent =
-      `${layout.canvasWidth} × ${layout.canvasHeight} · ${state.animation.frames.length} 帧 · ${recipeToken.length} 字符`;
+      `${layout.canvasWidth} × ${layout.canvasHeight} · ${state.animation.frames.length} 帧 · ${state.colorMapping ? '色彩映射' : '原始色彩'} · ${recipeToken.length} 字符`;
     transportDebug.hidden = false;
     const clipboardPromise = startAsyncCopyImage(blob);
     const nativeCopied = clipboardPromise ? await clipboardPromise : false;
@@ -755,6 +826,14 @@ emptyStage.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => chooseFile(fileInput.files?.[0]));
 resetGridButton.addEventListener('click', resetCrop);
 generateButton.addEventListener('click', copyImageRecipe);
+colorMappingInput.addEventListener('change', () => {
+  state.colorMapping = colorMappingInput.checked;
+  colorMappingInput
+    .closest('.switch-control')
+    .querySelector('em').textContent = state.colorMapping ? '开启' : '关闭';
+  updateCopyLabel();
+  if (state.image) renderOutputPreview();
+});
 
 function updateGridFromInputs({ commit = false } = {}) {
   let cols = gridColsInput.valueAsNumber;

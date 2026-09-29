@@ -11,6 +11,7 @@ import {
   decodeImageBytes,
   encodeGifFrames,
 } from './public/animation-core.js';
+import { mapToLuminanceAlpha } from './public/color-mapping.js';
 import {
   buildTileSpecs,
   generateAndUploadTiles,
@@ -113,6 +114,34 @@ test('fit crop remains inside the source image', () => {
   assert.ok(crop.x + crop.width <= 1);
   assert.ok(crop.y + crop.height <= 1);
   assert.ok(Math.abs((crop.width * 1600) / (crop.height * 900) - 1) < 1e-9);
+});
+
+test('maps RGB luminance and original alpha to grayscale transparency', () => {
+  const output = mapToLuminanceAlpha(
+    new Uint8ClampedArray([
+      255, 255, 255, 255,
+      0, 0, 0, 255,
+      255, 0, 0, 128,
+    ]),
+  );
+  assert.deepEqual(Array.from(output), [
+    254, 254, 254, 1,
+    0, 0, 0, 255,
+    54, 54, 54, 100,
+  ]);
+});
+
+test('color mapping supports a reusable output buffer', () => {
+  const output = new Uint8ClampedArray(4);
+  assert.equal(
+    mapToLuminanceAlpha(new Uint8ClampedArray([0, 255, 0, 64]), output),
+    output,
+  );
+  assert.deepEqual(Array.from(output), [182, 182, 182, 18]);
+  assert.throws(
+    () => mapToLuminanceAlpha(new Uint8ClampedArray([1, 2, 3])),
+    /RGBA 像素数据无效/,
+  );
 });
 
 test('extracts image keys from raw, rendered, and post content', () => {
@@ -492,6 +521,34 @@ test('browser GIF codec preserves frame count, delays, and loop', async () => {
   );
   assert.equal(decoded.loop, 0);
   assert.equal(decode(bytes).frames.length, 2);
+});
+
+test('browser GIF codec dithers mapped alpha to GIF transparency', async () => {
+  const mapped = mapToLuminanceAlpha(
+    new Uint8ClampedArray([
+      255, 255, 255, 255,
+      0, 0, 0, 255,
+    ]),
+  );
+  const blob = await encodeGifFrames({
+    width: 2,
+    height: 1,
+    frames: [
+      { data: mapped, delay: 100 },
+      { data: mapped, delay: 100 },
+    ],
+    loop: 0,
+    ditherTransparency: 'floyd-steinberg',
+  });
+  const decoded = await decodeImageBytes(
+    new Uint8Array(await blob.arrayBuffer()),
+    'image/gif',
+  );
+  assert.equal(decoded.frames.length, 2);
+  assert.deepEqual(
+    Array.from(decoded.frames[0].data).filter((_, index) => index % 4 === 3),
+    [0, 255],
+  );
 });
 
 test('browser APNG decoder preserves all frames and delays', async () => {

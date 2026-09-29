@@ -26,5 +26,8 @@ test('build embeds bundle replacement tokens literally', async () => {
   assert.match(output, /id="frame-picker"/);
   assert.match(output, /id="animation-badge"/);
   assert.match(output, /选择裁剪参考帧/);
+  assert.match(output, /id="color-mapping"/);
+  assert.match(output, /preview-comparison/);
+  assert.match(output, /mappedFrameData/);
   assert.doesNotMatch(output, /src="\.\/app\.js"/);
 });
