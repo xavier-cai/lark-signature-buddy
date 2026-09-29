@@ -133,11 +133,41 @@
           <div>
             <p class="eyebrow">READY TO COPY</p>
             <h2>切图结果</h2>
+            <p class="results-copy-hint">优先点击每张图的“复制图片”；若受 iframe 限制，会自动打开手动复制视图。</p>
           </div>
-          <button class="copy-all-button" id="copy-all-button" type="button">复制全部图片</button>
+          <div class="results-actions">
+            <button class="secondary-action" id="open-copy-queue-button" type="button">逐张复制</button>
+            <button class="copy-all-button" id="copy-all-button" type="button">复制全部图片</button>
+          </div>
         </div>
         <div class="result-grid" id="result-grid"></div>
       </section>
+
+      <div class="copy-dialog" id="copy-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="copy-dialog-title">
+        <button class="copy-dialog-backdrop" id="copy-dialog-backdrop" type="button" aria-label="关闭复制窗口"></button>
+        <section class="copy-dialog-card">
+          <header class="copy-dialog-header">
+            <div>
+              <p class="eyebrow">COPY QUEUE</p>
+              <h2 id="copy-dialog-title">复制切图</h2>
+            </div>
+            <button class="dialog-close" id="copy-dialog-close" type="button" aria-label="关闭">×</button>
+          </header>
+          <div class="copy-dialog-preview">
+            <img id="copy-dialog-image" alt="当前待复制切图" />
+          </div>
+          <div class="copy-dialog-meta">
+            <strong id="copy-dialog-index">第 1 张 / 共 1 张</strong>
+            <span>若自动复制失败，可右键或长按上方图片，选择“复制图片”。</span>
+          </div>
+          <div class="copy-dialog-actions">
+            <button class="secondary-action" id="copy-dialog-prev" type="button">上一张</button>
+            <button class="secondary-action" id="copy-dialog-download" type="button">下载当前图片</button>
+            <button class="primary-copy-action" id="copy-dialog-copy" type="button">复制当前图片</button>
+            <button class="secondary-action" id="copy-dialog-next" type="button">下一张</button>
+          </div>
+        </section>
+      </div>
 
       <footer>
         <span class="status-dot"></span>

@@ -35,6 +35,16 @@ const spinner = document.querySelector('#spinner');
 const results = document.querySelector('#results');
 const resultGrid = document.querySelector('#result-grid');
 const copyAllButton = document.querySelector('#copy-all-button');
+const openCopyQueueButton = document.querySelector('#open-copy-queue-button');
+const copyDialog = document.querySelector('#copy-dialog');
+const copyDialogBackdrop = document.querySelector('#copy-dialog-backdrop');
+const copyDialogClose = document.querySelector('#copy-dialog-close');
+const copyDialogImage = document.querySelector('#copy-dialog-image');
+const copyDialogIndex = document.querySelector('#copy-dialog-index');
+const copyDialogPrev = document.querySelector('#copy-dialog-prev');
+const copyDialogDownload = document.querySelector('#copy-dialog-download');
+const copyDialogCopy = document.querySelector('#copy-dialog-copy');
+const copyDialogNext = document.querySelector('#copy-dialog-next');
 
 const state = {
   file: null,
@@ -47,6 +57,7 @@ const state = {
   display: null,
   drag: null,
   generated: [],
+  copyIndex: 0,
 };
 
 function formatBytes(size) {
@@ -105,6 +116,7 @@ function chooseFile(file) {
   const imageUrl = URL.createObjectURL(file);
   const image = new Image();
   image.onload = () => {
+    clearGenerated();
     state.file = file;
     state.image = image;
     state.imageUrl = imageUrl;
@@ -414,6 +426,16 @@ function canvasToBlob(canvas) {
   });
 }
 
+function clearGenerated() {
+  for (const item of state.generated) {
+    if (item.objectUrl) URL.revokeObjectURL(item.objectUrl);
+  }
+  state.generated = [];
+  resultGrid.innerHTML = '';
+  results.hidden = true;
+  closeCopyDialog();
+}
+
 async function generateTiles() {
   if (!state.image || generateButton.disabled) return;
   generateButton.disabled = true;
@@ -423,12 +445,18 @@ async function generateTiles() {
   const tiles = sourceTileRects();
 
   try {
+    clearGenerated();
     const generated = [];
     for (let index = 0; index < tiles.length; index += 1) {
       generateLabel.textContent = `正在生成 ${index + 1} / ${tiles.length}`;
       const canvas = renderTileCanvas(tiles[index]);
       const blob = await canvasToBlob(canvas);
-      generated.push({ blob, index });
+      generated.push({
+        blob,
+        index,
+        objectUrl: URL.createObjectURL(blob),
+        dataUrl: tiles.length <= 25 ? canvas.toDataURL('image/png') : null,
+      });
       if (index % 12 === 0) await new Promise((resolve) => requestAnimationFrame(resolve));
     }
     state.generated = generated;
@@ -451,10 +479,14 @@ function renderResults(generated) {
     const card = document.createElement('article');
     card.className = 'result-card';
     const image = document.createElement('img');
-    const url = URL.createObjectURL(item.blob);
-    image.src = url;
+    image.src = item.objectUrl;
     image.alt = `第 ${item.index + 1} 张切图`;
-    image.onload = () => URL.revokeObjectURL(url);
+    image.tabIndex = 0;
+    image.title = '点击打开手动复制视图';
+    image.addEventListener('click', () => openCopyDialog(item.index));
+    image.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') openCopyDialog(item.index);
+    });
     const header = document.createElement('div');
     header.className = 'result-card-header';
     const title = document.createElement('strong');
@@ -463,7 +495,7 @@ function renderResults(generated) {
     button.type = 'button';
     button.className = 'copy-key';
     button.textContent = '复制图片';
-    button.addEventListener('click', () => copyImage(item.blob, button));
+    button.addEventListener('click', () => copyImage(item, button));
     const code = document.createElement('code');
     code.textContent = '粘贴给图片仔后获取 Image Key';
     header.append(title, button);
@@ -481,16 +513,66 @@ async function blobToDataUrl(blob) {
   });
 }
 
-async function copyImage(blob, button) {
-  if (!navigator.clipboard?.write || !window.ClipboardItem) {
-    throw new Error('当前浏览器不支持复制图片，请长按或右键图片复制');
-  }
-  await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+function legacyCopyImages(items) {
+  if (items.some((item) => !item.dataUrl)) return false;
+  const container = document.createElement('div');
+  container.contentEditable = 'true';
+  container.setAttribute('aria-hidden', 'true');
+  Object.assign(container.style, {
+    position: 'fixed',
+    left: '-10000px',
+    top: '0',
+    opacity: '0.01',
+    pointerEvents: 'none',
+  });
+  items.forEach((item) => {
+    const image = document.createElement('img');
+    image.src = item.dataUrl;
+    image.alt = `tile-${item.index + 1}.png`;
+    container.append(image);
+  });
+  document.body.append(container);
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(container);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  const copied = document.execCommand('copy');
+  selection.removeAllRanges();
+  container.remove();
+  return copied;
+}
+
+async function copyImage(item, button) {
   const original = button.textContent;
-  button.textContent = '已复制';
-  window.setTimeout(() => {
-    button.textContent = original;
-  }, 1200);
+  try {
+    if (legacyCopyImages([item])) {
+      button.textContent = '已复制';
+      setNotice(`子图 ${item.index + 1} 已复制，可直接粘贴给图片仔`, 'success');
+      return;
+    }
+    if (navigator.clipboard?.write && window.ClipboardItem) {
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'image/png': item.blob }),
+        ]);
+        button.textContent = '已复制';
+        setNotice(`子图 ${item.index + 1} 已复制，可直接粘贴给图片仔`, 'success');
+        return;
+      } catch {
+        // Feishu HTML5 blocks often deny async clipboard access; use manual copy next.
+      }
+    }
+    throw new Error('Clipboard unavailable');
+  } catch {
+    button.textContent = '手动复制';
+    openCopyDialog(item.index);
+    setNotice('iframe 未授权自动复制，已打开手动复制视图');
+  } finally {
+    window.setTimeout(() => {
+      button.textContent = original;
+    }, 1400);
+  }
 }
 
 async function copyAllImages() {
@@ -499,38 +581,80 @@ async function copyAllImages() {
   const original = copyAllButton.textContent;
   copyAllButton.textContent = '正在复制…';
   try {
-    const urls = await Promise.all(state.generated.map((item) => blobToDataUrl(item.blob)));
+    if (state.generated.length > 25) {
+      throw new Error('图片较多，请使用逐张复制队列');
+    }
+    const urls = await Promise.all(
+      state.generated.map(async (item) => {
+        if (!item.dataUrl) item.dataUrl = await blobToDataUrl(item.blob);
+        return item.dataUrl;
+      }),
+    );
     const html = `<div>${urls
       .map((url, index) => `<img src="${url}" alt="tile-${index + 1}.png">`)
       .join('')}</div>`;
-    if (!navigator.clipboard?.write || !window.ClipboardItem) {
-      throw new Error('当前浏览器不支持批量复制，请逐张复制');
+    if (navigator.clipboard?.write && window.ClipboardItem) {
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/html': new Blob([html], { type: 'text/html' }),
+            'text/plain': new Blob(
+              [`${state.generated.length} 张切图，请粘贴到飞书发送`],
+              { type: 'text/plain' },
+            ),
+          }),
+        ]);
+        copyAllButton.textContent = '已复制，去粘贴';
+        setNotice(
+          `已复制 ${state.generated.length} 张图片，直接粘贴给图片仔`,
+          'success',
+        );
+        return;
+      } catch {
+        // Fall through to selection-based rich HTML copy.
+      }
     }
-    await navigator.clipboard.write([
-      new ClipboardItem({
-        'text/html': new Blob([html], { type: 'text/html' }),
-        'text/plain': new Blob(
-          [`${state.generated.length} 张切图，请粘贴到飞书发送`],
-          { type: 'text/plain' },
-        ),
-      }),
-    ]);
+    if (!legacyCopyImages(state.generated)) {
+      throw new Error('批量剪贴板不可用，请使用逐张复制');
+    }
     copyAllButton.textContent = '已复制，去粘贴';
-    setNotice(
-      state.generated.length > 25
-        ? `已复制 ${state.generated.length} 张；数量较多，若飞书只识别部分图片请分批逐张复制`
-        : `已复制 ${state.generated.length} 张图片，直接粘贴给图片仔`,
-      'success',
-    );
+    setNotice(`已复制 ${state.generated.length} 张图片，直接粘贴给图片仔`, 'success');
   } catch (error) {
-    copyAllButton.textContent = '复制失败';
-    setNotice(error.message || '批量复制失败，请逐张复制');
+    copyAllButton.textContent = '改为逐张复制';
+    openCopyDialog(0);
+    setNotice(error.message || '批量复制受限，已打开逐张复制队列');
   } finally {
     window.setTimeout(() => {
       copyAllButton.textContent = original;
       copyAllButton.disabled = false;
     }, 1600);
   }
+}
+
+function openCopyDialog(index) {
+  if (state.generated.length === 0) return;
+  state.copyIndex = Math.max(0, Math.min(state.generated.length - 1, index));
+  const item = state.generated[state.copyIndex];
+  copyDialogImage.src = item.objectUrl;
+  copyDialogIndex.textContent = `第 ${state.copyIndex + 1} 张 / 共 ${state.generated.length} 张`;
+  copyDialogPrev.disabled = state.copyIndex === 0;
+  copyDialogNext.disabled = state.copyIndex === state.generated.length - 1;
+  copyDialog.hidden = false;
+}
+
+function closeCopyDialog() {
+  copyDialog.hidden = true;
+}
+
+function downloadCurrentImage() {
+  const item = state.generated[state.copyIndex];
+  if (!item) return;
+  const anchor = document.createElement('a');
+  anchor.href = item.objectUrl;
+  anchor.download = `image-buddy-${state.copyIndex + 1}.png`;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
 }
 
 function setGrid(cols, rows) {
@@ -554,6 +678,15 @@ fileInput.addEventListener('change', () => chooseFile(fileInput.files?.[0]));
 resetGridButton.addEventListener('click', resetCrop);
 generateButton.addEventListener('click', generateTiles);
 copyAllButton.addEventListener('click', copyAllImages);
+openCopyQueueButton.addEventListener('click', () => openCopyDialog(0));
+copyDialogBackdrop.addEventListener('click', closeCopyDialog);
+copyDialogClose.addEventListener('click', closeCopyDialog);
+copyDialogPrev.addEventListener('click', () => openCopyDialog(state.copyIndex - 1));
+copyDialogNext.addEventListener('click', () => openCopyDialog(state.copyIndex + 1));
+copyDialogDownload.addEventListener('click', downloadCurrentImage);
+copyDialogCopy.addEventListener('click', () =>
+  copyImage(state.generated[state.copyIndex], copyDialogCopy),
+);
 
 function updateGridFromInputs({ commit = false } = {}) {
   let cols = gridColsInput.valueAsNumber;
@@ -641,4 +774,11 @@ window.addEventListener('paste', (event) => {
 
 window.addEventListener('resize', () => {
   if (state.image) drawEditor();
+});
+
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !copyDialog.hidden) closeCopyDialog();
+  if (copyDialog.hidden) return;
+  if (event.key === 'ArrowLeft') openCopyDialog(state.copyIndex - 1);
+  if (event.key === 'ArrowRight') openCopyDialog(state.copyIndex + 1);
 });
