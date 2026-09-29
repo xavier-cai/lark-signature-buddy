@@ -6,9 +6,12 @@ import process from 'node:process';
 import {
   eventBatchKey,
   extractImageKeys,
-  extractImageRecipe,
   formatRecipeReceipt,
 } from './bot-core.mjs';
+import {
+  decodeRecipeFromImage,
+  downloadMessageImage,
+} from './bot-image.mjs';
 
 const PROFILE = process.env.IMAGE_BUDDY_PROFILE || 'image-buddy';
 const DEBOUNCE_MS = Number.parseInt(process.env.IMAGE_BUDDY_BATCH_DELAY_MS || '1500', 10);
@@ -66,14 +69,22 @@ async function replyToBatch(batchKey) {
   let text;
   if (batch.errors.length > 0) {
     text = `切图请求读取失败：${batch.errors[0]}`;
-  } else if (batch.recipes.length > 1) {
-    text = `切图请求无效：期望 1 份 recipe，收到 ${batch.recipes.length} 份。`;
-  } else if (batch.recipes.length === 1) {
-    text = formatRecipeReceipt(keys, batch.recipes[0]);
-  } else if (keys.length > 0) {
-    text = '切图请求无效：未读取到 IMAGE_BUDDY_RECIPE_V1 参数。';
+  } else if (batch.images.length !== 1) {
+    text = `切图请求无效：期望 1 张传输图，收到 ${batch.images.length} 张。`;
   } else {
-    return;
+    const image = batch.images[0];
+    try {
+      const input = await downloadMessageImage({
+        messageId: image.messageId,
+        imageKey: image.imageKey,
+        profile: PROFILE,
+        runLark,
+      });
+      const decoded = await decodeRecipeFromImage(input);
+      text = formatRecipeReceipt([image.imageKey], decoded.recipe, decoded.image);
+    } catch (error) {
+      text = `切图请求读取失败：${error.message}`;
+    }
   }
   try {
     await runLark([
@@ -94,7 +105,6 @@ async function replyToBatch(batchKey) {
     log('info', 'replied with image keys', {
       messageId: batch.replyMessageId,
       imageCount: keys.length,
-      recipeCount: batch.recipes.length,
     });
   } catch (error) {
     log('error', 'failed to reply with image keys', {
@@ -104,13 +114,13 @@ async function replyToBatch(batchKey) {
   }
 }
 
-function scheduleBatch(event, { imageKeys = [], recipe = null, error = null }) {
+function scheduleBatch(event, { imageKeys = [], error = null }) {
   const key = eventBatchKey(event);
   const now = Date.now();
   const existing = batches.get(key);
   const batch = existing || {
     imageKeys: [],
-    recipes: [],
+    images: [],
     errors: [],
     messageIds: [],
     replyMessageId: event.message_id,
@@ -118,7 +128,12 @@ function scheduleBatch(event, { imageKeys = [], recipe = null, error = null }) {
     timer: null,
   };
   batch.imageKeys.push(...imageKeys);
-  if (recipe) batch.recipes.push(recipe);
+  batch.images.push(
+    ...imageKeys.map((imageKey) => ({
+      imageKey,
+      messageId: event.message_id,
+    })),
+  );
   if (error) batch.errors.push(error);
   batch.messageIds.push(event.message_id);
   batch.replyMessageId = event.message_id;
@@ -142,15 +157,8 @@ function handleEvent(event) {
   seenMessages.set(event.message_id, Date.now());
   if (seenMessages.size > 5000) cleanupSeen();
   const imageKeys = extractImageKeys(event.content);
-  let recipe = null;
-  let error = null;
-  try {
-    recipe = extractImageRecipe(event.content);
-  } catch (caught) {
-    error = caught.message;
-  }
-  if (imageKeys.length === 0 && !recipe && !error) return;
-  scheduleBatch(event, { imageKeys, recipe, error });
+  if (imageKeys.length === 0) return;
+  scheduleBatch(event, { imageKeys });
 }
 
 const consumer = spawn(

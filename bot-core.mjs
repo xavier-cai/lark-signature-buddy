@@ -65,16 +65,16 @@ export function extractImageRecipe(content) {
   return decodeImageRecipe(tokens[0]);
 }
 
-export function formatRecipeReceipt(imageKeys, recipe) {
+export function formatRecipeReceipt(imageKeys, recipe, transportImage = null) {
   const uniqueKeys = [...new Set(imageKeys)];
   if (uniqueKeys.length !== 1) {
     return `切图请求无效：期望 1 张原图，收到 ${uniqueKeys.length} 张。`;
   }
   const { source, grid, crop, mode, gapRatio, output } = recipe;
-  return [
+  const lines = [
     '切图参数读取成功（当前仅验证，不执行切图）：',
     '',
-    `原图 image_key：${uniqueKeys[0]}`,
+    `传输图 image_key：${uniqueKeys[0]}`,
     `协议：${recipe.protocol} V${recipe.version}`,
     `原图尺寸：${source.width} × ${source.height}`,
     `网格：${grid.cols} × ${grid.rows}（${grid.cols * grid.rows} 张）`,
@@ -82,5 +82,11 @@ export function formatRecipeReceipt(imageKeys, recipe) {
     `模式：${mode}`,
     `间隔比例：${gapRatio}`,
     `输出：${output.width} × ${output.height} ${output.format.toUpperCase()}`,
-  ].join('\n');
+  ];
+  if (transportImage) {
+    lines.push(
+      `传输图片：${transportImage.width} × ${transportImage.height} ${transportImage.format.toUpperCase()}`,
+    );
+  }
+  return lines.join('\n');
 }

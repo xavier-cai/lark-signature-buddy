@@ -15,7 +15,7 @@
           <div>
             <p class="eyebrow">IMAGE BUDDY</p>
             <h1>网格切图与图片仔</h1>
-            <p class="intro">同屏调整选区、网格和间隔预裁剪，一次复制原图与切图参数并粘贴给图片仔。</p>
+            <p class="intro">同屏调整选区、网格和间隔预裁剪，把参数内嵌进原图 PNG 后粘贴给图片仔。</p>
           </div>
         </div>
         <button class="upload-button" id="upload-button" type="button">
@@ -122,7 +122,7 @@
 
           <div class="notice" id="notice" role="status" aria-live="polite"></div>
           <button class="generate-button" id="generate-button" type="button" disabled>
-            <span id="generate-label">选择图片后即可复制原图 + 参数</span>
+            <span id="generate-label">选择图片后即可复制含参数原图</span>
             <span class="spinner" id="spinner" hidden aria-hidden="true"></span>
           </button>
         </aside>
@@ -130,7 +130,7 @@
 
       <footer>
         <span class="status-dot"></span>
-        <span>选区参数在浏览器内生成；复制原图和参数后直接粘贴发送给图片仔 Bot。</span>
+        <span>选区参数内嵌在 PNG 文件中；复制后直接粘贴发送给图片仔 Bot。</span>
       </footer>
     </main>
 

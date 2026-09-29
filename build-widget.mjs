@@ -1,22 +1,25 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
-const [template, css, imageRecipe, gridCore, js] = await Promise.all([
+const [template, css, bundle] = await Promise.all([
   readFile(join(ROOT, 'public', 'index.html'), 'utf8'),
   readFile(join(ROOT, 'public', 'styles.css'), 'utf8'),
-  readFile(join(ROOT, 'public', 'image-recipe.js'), 'utf8'),
-  readFile(join(ROOT, 'public', 'grid-core.js'), 'utf8'),
-  readFile(join(ROOT, 'public', 'app.js'), 'utf8'),
+  build({
+    entryPoints: [join(ROOT, 'public', 'app.js')],
+    bundle: true,
+    format: 'iife',
+    platform: 'browser',
+    write: false,
+    minify: true,
+    target: ['chrome100'],
+  }),
 ]);
 
-const bundledScript = [
-  imageRecipe.replaceAll('export ', ''),
-  gridCore.replaceAll('export ', ''),
-  js.replace(/import\s*\{[\s\S]*?\}\s*from\s*['"]\.\/(?:image-recipe|grid-core)\.js['"];\s*/g, ''),
-].join('\n');
+const bundledScript = bundle.outputFiles[0].text;
 
 const output = template
   .replace(

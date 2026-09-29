@@ -1,11 +1,16 @@
 export const IMAGE_RECIPE_NAME = 'image-buddy-recipe';
 export const IMAGE_RECIPE_VERSION = 1;
-export const IMAGE_RECIPE_PREFIX = `IMAGE_BUDDY_RECIPE_V${IMAGE_RECIPE_VERSION}:`;
+export const IMAGE_RECIPE_PREFIX = `IB${IMAGE_RECIPE_VERSION}:`;
+export const IMAGE_RECIPE_BYTE_LENGTH = 31;
+export const IMAGE_RECIPE_TOKEN_MAX_LENGTH = 48;
 
-const TOKEN_PATTERN = /\bIMAGE_BUDDY_RECIPE_V(\d+):([^\s<>"']+)/g;
-const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
-const MODES = new Set(['plain', 'precut']);
-const FORMATS = new Set(['png']);
+const TOKEN_PATTERN = /\bIB(\d+):([A-Za-z0-9_-]+)\b/g;
+const MODE_TO_CODE = new Map([
+  ['plain', 0],
+  ['precut', 1],
+]);
+const FORMAT_PNG = 0;
+const NORMALIZED_MAX = 65535;
 
 function fail(message) {
   throw new Error(`切图参数无效：${message}`);
@@ -37,12 +42,34 @@ function assertNumber(value, min, max, path) {
   }
 }
 
+function assertRect(rect, path) {
+  assertExactKeys(rect, ['x', 'y', 'width', 'height'], path);
+  assertNumber(rect.x, 0, 1, `${path}.x`);
+  assertNumber(rect.y, 0, 1, `${path}.y`);
+  assertNumber(rect.width, 0, 1, `${path}.width`);
+  assertNumber(rect.height, 0, 1, `${path}.height`);
+  if (rect.width === 0 || rect.height === 0) fail(`${path} 尺寸不能为 0`);
+  if (rect.x + rect.width > 1.00002) fail(`${path} 超出右边界`);
+  if (rect.y + rect.height > 1.00002) fail(`${path} 超出下边界`);
+}
+
 function round(value) {
   return Number(value.toFixed(8));
 }
 
-function encodeBase64Url(value) {
-  const bytes = new TextEncoder().encode(value);
+function normalizedToUint16(value) {
+  return Math.round(value * NORMALIZED_MAX);
+}
+
+function uint16ToNormalized(value) {
+  return round(value / NORMALIZED_MAX);
+}
+
+function quantizeNormalized(value) {
+  return uint16ToNormalized(normalizedToUint16(value));
+}
+
+function encodeBase64Url(bytes) {
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary)
@@ -52,23 +79,27 @@ function encodeBase64Url(value) {
 }
 
 function decodeBase64Url(value) {
-  if (!BASE64URL_PATTERN.test(value) || value.length % 4 === 1) {
+  if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) {
     fail('编码格式错误');
   }
   const base64 = value.replaceAll('-', '+').replaceAll('_', '/');
   const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
-  let binary;
   try {
-    binary = atob(padded);
+    return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
   } catch {
     fail('编码无法解码');
   }
-  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  } catch {
-    fail('编码不是 UTF-8');
+}
+
+export function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
   }
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
 export function validateImageRecipe(value) {
@@ -89,24 +120,16 @@ export function validateImageRecipe(value) {
   assertExactKeys(value.grid, ['cols', 'rows'], 'grid');
   assertInteger(value.grid.cols, 1, 15, 'grid.cols');
   assertInteger(value.grid.rows, 1, 15, 'grid.rows');
+  assertRect(value.crop, 'crop');
 
-  assertExactKeys(value.crop, ['x', 'y', 'width', 'height'], 'crop');
-  assertNumber(value.crop.x, 0, 1, 'crop.x');
-  assertNumber(value.crop.y, 0, 1, 'crop.y');
-  assertNumber(value.crop.width, 0, 1, 'crop.width');
-  assertNumber(value.crop.height, 0, 1, 'crop.height');
-  if (value.crop.width === 0 || value.crop.height === 0) fail('crop 尺寸不能为 0');
-  if (value.crop.x + value.crop.width > 1.00000001) fail('crop 超出图片右边界');
-  if (value.crop.y + value.crop.height > 1.00000001) fail('crop 超出图片下边界');
-
-  if (!MODES.has(value.mode)) fail('mode 必须是 plain 或 precut');
+  if (!MODE_TO_CODE.has(value.mode)) fail('mode 必须是 plain 或 precut');
   assertNumber(value.gapRatio, 0, 1, 'gapRatio');
 
   assertExactKeys(value.output, ['width', 'height', 'format'], 'output');
   assertInteger(value.output.width, 1, 4096, 'output.width');
   assertInteger(value.output.height, 1, 4096, 'output.height');
-  if (!FORMATS.has(value.output.format)) fail('output.format 必须是 png');
-
+  if (value.output.width !== value.output.height) fail('V1 仅支持正方形输出');
+  if (value.output.format !== 'png') fail('output.format 必须是 png');
   return value;
 }
 
@@ -123,54 +146,95 @@ export function createImageRecipe({
   return validateImageRecipe({
     protocol: IMAGE_RECIPE_NAME,
     version: IMAGE_RECIPE_VERSION,
-    source: {
-      width: sourceWidth,
-      height: sourceHeight,
-    },
+    source: { width: sourceWidth, height: sourceHeight },
     grid: { cols, rows },
     crop: {
-      x: round(crop.x),
-      y: round(crop.y),
-      width: round(crop.width),
-      height: round(crop.height),
+      x: quantizeNormalized(crop.x),
+      y: quantizeNormalized(crop.y),
+      width: quantizeNormalized(crop.width),
+      height: quantizeNormalized(crop.height),
     },
     mode,
-    gapRatio: round(gapRatio),
-    output: {
-      width: outputSize,
-      height: outputSize,
-      format: 'png',
-    },
+    gapRatio: quantizeNormalized(gapRatio),
+    output: { width: outputSize, height: outputSize, format: 'png' },
   });
 }
 
 export function encodeImageRecipe(recipe) {
-  const validated = validateImageRecipe(recipe);
-  return `${IMAGE_RECIPE_PREFIX}${encodeBase64Url(JSON.stringify(validated))}`;
+  const value = validateImageRecipe(recipe);
+  const bytes = new Uint8Array(IMAGE_RECIPE_BYTE_LENGTH);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 0x49;
+  bytes[1] = 0x42;
+  bytes[2] = IMAGE_RECIPE_VERSION;
+  bytes[3] = MODE_TO_CODE.get(value.mode);
+  view.setUint32(4, value.source.width);
+  view.setUint32(8, value.source.height);
+  bytes[12] = value.grid.cols;
+  bytes[13] = value.grid.rows;
+  const normalized = [
+    value.crop.x,
+    value.crop.y,
+    value.crop.width,
+    value.crop.height,
+    value.gapRatio,
+  ];
+  normalized.forEach((number, index) => {
+    view.setUint16(14 + index * 2, normalizedToUint16(number));
+  });
+  view.setUint16(24, value.output.width);
+  bytes[26] = FORMAT_PNG;
+  view.setUint32(27, crc32(bytes.subarray(0, 27)));
+  const token = `${IMAGE_RECIPE_PREFIX}${encodeBase64Url(bytes)}`;
+  if (token.length > IMAGE_RECIPE_TOKEN_MAX_LENGTH) fail('编码超过长度上限');
+  return token;
 }
 
 export function decodeImageRecipe(token) {
-  const match = /^IMAGE_BUDDY_RECIPE_V(\d+):([^\s]+)$/.exec(token);
+  const match = /^IB(\d+):([A-Za-z0-9_-]+)$/.exec(token);
   if (!match) fail('缺少完整协议标记');
   const markerVersion = Number(match[1]);
   if (markerVersion !== IMAGE_RECIPE_VERSION) {
     fail(`仅支持 V${IMAGE_RECIPE_VERSION}，收到 V${markerVersion}`);
   }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(decodeBase64Url(match[2]));
-  } catch (error) {
-    if (error.message.startsWith('切图参数无效：')) throw error;
-    fail('payload 不是合法 JSON');
+  const bytes = decodeBase64Url(match[2]);
+  if (bytes.length !== IMAGE_RECIPE_BYTE_LENGTH) {
+    fail(`payload 长度应为 ${IMAGE_RECIPE_BYTE_LENGTH} bytes`);
   }
-  if (parsed.version !== markerVersion) fail('协议标记与 payload 版本不一致');
-  return validateImageRecipe(parsed);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes[0] !== 0x49 || bytes[1] !== 0x42) fail('magic 不匹配');
+  if (bytes[2] !== markerVersion) fail('协议标记与 payload 版本不一致');
+  if (view.getUint32(27) !== crc32(bytes.subarray(0, 27))) fail('CRC32 校验失败');
+  const mode = [...MODE_TO_CODE].find(([, code]) => code === bytes[3])?.[0];
+  if (!mode) fail('mode 编码未知');
+  if (bytes[26] !== FORMAT_PNG) fail('output.format 编码未知');
+
+  const normalized = Array.from({ length: 5 }, (_, index) =>
+    uint16ToNormalized(view.getUint16(14 + index * 2)),
+  );
+  return validateImageRecipe({
+    protocol: IMAGE_RECIPE_NAME,
+    version: bytes[2],
+    source: { width: view.getUint32(4), height: view.getUint32(8) },
+    grid: { cols: bytes[12], rows: bytes[13] },
+    crop: {
+      x: normalized[0],
+      y: normalized[1],
+      width: normalized[2],
+      height: normalized[3],
+    },
+    mode,
+    gapRatio: normalized[4],
+    output: {
+      width: view.getUint16(24),
+      height: view.getUint16(24),
+      format: 'png',
+    },
+  });
 }
 
 export function extractImageRecipeTokens(content) {
   const tokens = [];
-
   function visit(value) {
     if (typeof value === 'string') {
       for (const match of value.matchAll(TOKEN_PATTERN)) tokens.push(match[0]);
@@ -178,7 +242,7 @@ export function extractImageRecipeTokens(content) {
         const parsed = JSON.parse(value);
         if (parsed !== value) visit(parsed);
       } catch {
-        // Event content is frequently a human-readable string rather than JSON.
+        // Event content is frequently human-readable text rather than JSON.
       }
       return;
     }
@@ -190,7 +254,6 @@ export function extractImageRecipeTokens(content) {
       for (const item of Object.values(value)) visit(item);
     }
   }
-
   visit(content);
   return [...new Set(tokens)];
 }

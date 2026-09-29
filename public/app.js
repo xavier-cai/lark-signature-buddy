@@ -9,6 +9,11 @@ import {
   selectionAspect,
   tileRects,
 } from './grid-core.js';
+import {
+  isAnimatedImageBytes,
+  validateStaticImageSize,
+} from './image-format.js';
+import { embedRecipeInPng } from './png-recipe.js';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const HANDLE_RADIUS = 9;
@@ -51,10 +56,10 @@ const state = {
 
 function updateCopyLabel() {
   if (!state.image) {
-    generateLabel.textContent = '选择图片后即可复制原图 + 参数';
+    generateLabel.textContent = '选择图片后即可复制含参数原图';
     return;
   }
-  generateLabel.textContent = '复制原图 + 切图参数';
+  generateLabel.textContent = '复制含参数原图 PNG';
 }
 
 function formatBytes(size) {
@@ -69,8 +74,13 @@ function setNotice(message = '', type = 'error') {
 }
 
 function isSupported(file) {
-  const extensions = /\.(jpe?g|png|webp|gif|bmp|ico|tiff?|heic)$/i;
+  const extensions = /\.(jpe?g|png|webp|bmp|ico|tiff?|heic)$/i;
   return file.type.startsWith('image/') || extensions.test(file.name);
+}
+
+async function isAnimatedImage(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return isAnimatedImageBytes(bytes);
 }
 
 function currentGrid() {
@@ -93,7 +103,7 @@ function resetCrop() {
   renderOutputPreview();
 }
 
-function chooseFile(file) {
+async function chooseFile(file) {
   setNotice();
   if (!file) return;
   if (!isSupported(file)) {
@@ -108,11 +118,30 @@ function chooseFile(file) {
     setNotice('图片超过 10 MB，请压缩后再上传。');
     return;
   }
+  let animated;
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    animated = isAnimatedImageBytes(bytes);
+  } catch {
+    setNotice('无法读取图片内容，请换一张图片。');
+    return;
+  }
+  if (animated) {
+    setNotice('当前 V1 暂不支持 GIF、APNG 或 Animated WebP 动图。');
+    return;
+  }
 
   if (state.imageUrl) URL.revokeObjectURL(state.imageUrl);
   const imageUrl = URL.createObjectURL(file);
   const image = new Image();
   image.onload = () => {
+    try {
+      validateStaticImageSize(image.naturalWidth, image.naturalHeight);
+    } catch (error) {
+      URL.revokeObjectURL(imageUrl);
+      setNotice(error.message);
+      return;
+    }
     state.file = file;
     state.image = image;
     state.imageUrl = imageUrl;
@@ -386,15 +415,6 @@ function renderOutputPreview() {
   outputPreview.replaceChildren(preview);
 }
 
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error || new Error('读取原图失败'));
-    reader.readAsDataURL(file);
-  });
-}
-
 function currentRecipeToken() {
   const { cols, rows } = currentGrid();
   return encodeImageRecipe(
@@ -411,7 +431,41 @@ function currentRecipeToken() {
   );
 }
 
-function legacyCopyPackage(imageDataUrl, recipeToken) {
+function dataUrlToBytes(dataUrl) {
+  const encoded = dataUrl.slice(dataUrl.indexOf(',') + 1);
+  return Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+}
+
+function bytesToDataUrl(bytes) {
+  const chunkSize = 32768;
+  const chunks = [];
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    chunks.push(
+      String.fromCharCode(...bytes.subarray(offset, offset + chunkSize)),
+    );
+  }
+  return `data:image/png;base64,${btoa(chunks.join(''))}`;
+}
+
+function buildTransportImage() {
+  const canvas = document.createElement('canvas');
+  canvas.width = state.image.naturalWidth;
+  canvas.height = state.image.naturalHeight;
+  const context = canvas.getContext('2d');
+  context.drawImage(state.image, 0, 0);
+  const pngBytes = dataUrlToBytes(canvas.toDataURL('image/png'));
+  if (pngBytes.length > 20 * 1024 * 1024) {
+    throw new Error('转换后的 PNG 超过 20 MB，请缩小图片后重试');
+  }
+  const encoded = embedRecipeInPng(pngBytes, currentRecipeToken());
+  const blob = new Blob([encoded], { type: 'image/png' });
+  return {
+    blob,
+    dataUrl: bytesToDataUrl(encoded),
+  };
+}
+
+function legacyCopyImage(imageUrl) {
   const container = document.createElement('div');
   container.contentEditable = 'true';
   container.setAttribute('aria-hidden', 'true');
@@ -423,11 +477,9 @@ function legacyCopyPackage(imageDataUrl, recipeToken) {
     pointerEvents: 'none',
   });
   const image = document.createElement('img');
-  image.src = imageDataUrl;
-  image.alt = 'image-buddy-source';
-  const metadata = document.createElement('p');
-  metadata.textContent = recipeToken;
-  container.append(image, metadata);
+  image.src = imageUrl;
+  image.alt = '';
+  container.append(image);
   document.body.append(container);
   const selection = window.getSelection();
   const range = document.createRange();
@@ -440,24 +492,19 @@ function legacyCopyPackage(imageDataUrl, recipeToken) {
   return copied;
 }
 
-async function asyncCopyPackage(imageDataUrl, recipeToken) {
-  if (!navigator.clipboard?.write || !window.ClipboardItem) return false;
-  const html = [
-    '<div>',
-    `<img src="${imageDataUrl}" alt="image-buddy-source">`,
-    `<p>${recipeToken}</p>`,
-    '</div>',
-  ].join('');
+function startAsyncCopyImage(blob) {
+  if (!navigator.clipboard?.write || !window.ClipboardItem) return null;
   try {
-    await navigator.clipboard.write([
-      new ClipboardItem({
-        'text/html': new Blob([html], { type: 'text/html' }),
-        'text/plain': new Blob([recipeToken], { type: 'text/plain' }),
-      }),
-    ]);
-    return true;
+    return navigator.clipboard
+      .write([
+        new ClipboardItem({ 'image/png': blob }),
+      ])
+      .then(
+        () => true,
+        () => false,
+      );
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -467,17 +514,16 @@ async function copyImageRecipe() {
   spinner.hidden = false;
   setNotice();
   try {
-    const [imageDataUrl, recipeToken] = await Promise.all([
-      fileToDataUrl(state.file),
-      Promise.resolve(currentRecipeToken()),
-    ]);
-    const copied =
-      legacyCopyPackage(imageDataUrl, recipeToken) ||
-      (await asyncCopyPackage(imageDataUrl, recipeToken));
+    const { blob, dataUrl } = buildTransportImage();
+    const legacyCopied = legacyCopyImage(dataUrl);
+    const clipboardPromise = startAsyncCopyImage(blob);
+    const copied = clipboardPromise
+      ? (await clipboardPromise) || legacyCopied
+      : legacyCopied;
     if (!copied) {
-      throw new Error('当前飞书文档不允许复制图文内容');
+      throw new Error('当前飞书文档不允许复制图片');
     }
-    setNotice('已复制原图和切图参数，请粘贴发送给图片仔验证', 'success');
+    setNotice('已复制含切图参数的原图 PNG，请粘贴发送给图片仔验证', 'success');
   } catch (error) {
     setNotice(error.message || '复制失败，请稍后重试。');
   } finally {

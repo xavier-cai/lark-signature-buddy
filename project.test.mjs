@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { decodeRecipeFromImage } from './bot-image.mjs';
 import {
   eventBatchKey,
   extractImageKeys,
@@ -21,6 +22,14 @@ import {
   selectionAspect,
   tileRects,
 } from './public/grid-core.js';
+import {
+  isAnimatedImageBytes,
+  validateStaticImageSize,
+} from './public/image-format.js';
+import {
+  embedRecipeInPng,
+  extractRecipeFromPng,
+} from './public/png-recipe.js';
 
 test('parses supported grids', () => {
   assert.deepEqual(parseGrid('2x3'), { cols: 2, rows: 3 });
@@ -158,7 +167,8 @@ const recipe = createImageRecipe({
 
 test('round-trips the shared V1 image recipe', () => {
   const token = encodeImageRecipe(recipe);
-  assert.match(token, /^IMAGE_BUDDY_RECIPE_V1:[A-Za-z0-9_-]+$/);
+  assert.match(token, /^IB1:[A-Za-z0-9_-]+$/);
+  assert.ok(token.length <= 64);
   assert.deepEqual(decodeImageRecipe(token), recipe);
 });
 
@@ -176,8 +186,13 @@ test('extracts a recipe from nested Lark message content', () => {
 test('strictly rejects recipe version mismatches and extra fields', () => {
   const token = encodeImageRecipe(recipe);
   assert.throws(
-    () => decodeImageRecipe(token.replace('RECIPE_V1', 'RECIPE_V2')),
+    () => decodeImageRecipe(token.replace('IB1:', 'IB2:')),
     /仅支持 V1，收到 V2/,
+  );
+  const replacement = token.endsWith('A') ? 'B' : 'A';
+  assert.throws(
+    () => decodeImageRecipe(`${token.slice(0, -1)}${replacement}`),
+    /CRC32 校验失败/,
   );
   assert.throws(
     () => encodeImageRecipe({ ...recipe, unexpected: true }),
@@ -194,5 +209,63 @@ test('formats a validated recipe receipt for one source image', () => {
   assert.match(
     formatRecipeReceipt(['img_one', 'img_two'], recipe),
     /期望 1 张原图，收到 2 张/,
+  );
+});
+
+const tinyPng = Uint8Array.from(
+  Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  ),
+);
+
+test('embeds and extracts a recipe from PNG metadata without changing dimensions', async () => {
+  const tinyRecipe = createImageRecipe({
+    sourceWidth: 1,
+    sourceHeight: 1,
+    cols: 1,
+    rows: 1,
+    crop: { x: 0, y: 0, width: 1, height: 1 },
+    mode: 'plain',
+    gapRatio: 0,
+    outputSize: 512,
+  });
+  const token = encodeImageRecipe(tinyRecipe);
+  const encoded = embedRecipeInPng(tinyPng, token);
+  assert.equal(extractRecipeFromPng(encoded), token);
+  assert.ok(encoded.length > tinyPng.length);
+  const decoded = await decodeRecipeFromImage(encoded);
+  assert.deepEqual(decoded.recipe, tinyRecipe);
+  assert.deepEqual(decoded.image, {
+    width: 1,
+    height: 1,
+    format: 'png',
+  });
+});
+
+test('rejects PNGs without metadata and invalid image dimensions', async () => {
+  await assert.rejects(() => decodeRecipeFromImage(tinyPng), /未找到 ImageBuddy/);
+  assert.throws(() => validateStaticImageSize(8192, 8192), /32 MP/);
+  assert.throws(() => validateStaticImageSize(9000, 10), /8192 px/);
+});
+
+test('detects GIF, APNG, and animated WebP signatures', () => {
+  assert.equal(
+    isAnimatedImageBytes(new TextEncoder().encode('GIF89a')),
+    true,
+  );
+  const apng = new Uint8Array(32);
+  apng.set([0x89, 0x50, 0x4e, 0x47], 0);
+  apng.set([0, 0, 0, 0], 8);
+  apng.set(new TextEncoder().encode('acTL'), 12);
+  assert.equal(isAnimatedImageBytes(apng), true);
+  const animatedWebp = new Uint8Array(20);
+  animatedWebp.set(new TextEncoder().encode('RIFF'), 0);
+  animatedWebp.set(new TextEncoder().encode('WEBP'), 8);
+  animatedWebp.set(new TextEncoder().encode('ANIM'), 12);
+  assert.equal(isAnimatedImageBytes(animatedWebp), true);
+  assert.equal(
+    isAnimatedImageBytes(new TextEncoder().encode('RIFF0000WEBPVP8 ')),
+    false,
   );
 });

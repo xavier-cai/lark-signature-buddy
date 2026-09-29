@@ -10,6 +10,8 @@ image-buddy-local/
 │   ├── index.html       # 切图页面
 │   ├── app.js           # 选区与剪贴板交互
 │   ├── image-recipe.js  # 前端与 Bot 共用的严格版本协议
+│   ├── png-recipe.js    # PNG tEXt 参数块编码与解码
+│   ├── image-format.js  # 静态图格式与尺寸检查
 │   ├── grid-core.js     # 网格与裁剪算法
 │   └── styles.css       # 页面样式
 ├── bot.mjs              # 飞书长连接消费者
@@ -25,13 +27,15 @@ image-buddy-local/
 
 1. 在飞书文档的 HTML5 Block 中上传、拖拽或粘贴原图。
 2. 输入列数和行数（各 1–15），调整选区、模式与渲染间隔。
-3. 点击主按钮，一次复制原图和 `IMAGE_BUDDY_RECIPE_V1` 参数。
+3. 点击主按钮，把原图转为同尺寸 PNG，并把 `IB1` 参数写入 `ImageBuddy`
+   `tEXt` chunk 后复制。
 4. 粘贴发送给“图片仔”Bot。
-5. 当前阶段 Bot 聚合同一用户在短时间内发送的图片和参数，严格校验 V1
-   协议并回显解析结果；暂不下载、切图或上传子图。
+5. 当前阶段 Bot 下载图片，从 PNG chunk 读取并严格校验 V1 协议，然后回显
+   解析结果；暂不切图或上传子图。
 
-浏览器剪贴板无法可靠地一次写入多张独立图片，因此前端只传一张原图和切图
-配方。后续由 Bot 使用同一份协议和网格算法生成子图，避免两端对参数理解不同。
+浏览器剪贴板无法可靠地一次写入多张独立图片，因此前端只复制一张视觉内容和
+尺寸不变的 PNG。切图配方放在 PNG 文件结构内，不增加二维码、边框或 padding。
+后续由 Bot 使用同一份协议和网格算法生成子图，避免两端对参数理解不同。
 
 ## 共享切图协议
 
@@ -41,7 +45,7 @@ image-buddy-local/
 - 构建 HTML5 Block 时，它会与页面脚本一起内联。
 - Bot 直接导入它来提取、解码和严格校验 payload。
 
-当前只支持 `IMAGE_BUDDY_RECIPE_V1`。协议标记、payload 版本、字段集合或参数范围
+当前只支持紧凑二进制 `IB1`。协议标记、payload 版本、字段集合或参数范围
 不一致时直接报错，不做向前或向后兼容。
 
 V1 字段包含：
@@ -52,6 +56,16 @@ V1 字段包含：
 - `plain` / `precut` 模式
 - 间隔比例
 - 目标子图宽高和格式
+
+编码后的 V1 token 固定不超过 48 个 ASCII 字符，写入 PNG `tEXt` chunk：
+
+```text
+keyword = ImageBuddy
+text    = IB1:<base64url binary payload>
+```
+
+V1 暂不支持 GIF、APNG 或 Animated WebP。其他静态格式会在浏览器中转成同尺寸
+PNG；最大边长 8192 px、最大 32 MP，转换后 PNG 不超过 20 MB。
 
 ## 构建文档组件
 
@@ -161,6 +175,6 @@ npm test
 ## 安全与运行边界
 
 - 选区和参数编码在浏览器内完成，原图通过用户粘贴上传到飞书。
-- 当前阶段 Bot 不下载图片，只读取消息中的 `image_key` 和切图参数。
+- 当前阶段 Bot 下载消息图片并读取 PNG `ImageBuddy` chunk，但不生成子图。
 - Bot 以 `message_id` 去重，并为回复生成幂等 key。
 - 长连接不需要公网 Host，但当前机器和 systemd 服务必须在线。
