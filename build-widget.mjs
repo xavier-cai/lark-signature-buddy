@@ -29,10 +29,13 @@ const output = template
     <meta name="html-box-height-mode" content="viewport" />
     <meta name="description" content="图片仔：离线网格切图并复制图片的文档工具" />`,
   )
-  .replace('<link rel="stylesheet" href="./styles.css" />', `<style>${css}</style>`)
+  .replace(
+    '<link rel="stylesheet" href="./styles.css" />',
+    () => `<style>${css}</style>`,
+  )
   .replace(
     '<script type="module" src="./app.js"></script>',
-    `<script type="module">${bundledScript}</script>`,
+    () => `<script type="module">${bundledScript}</script>`,
   );
 
 await mkdir(join(ROOT, 'dist'), { recursive: true });
