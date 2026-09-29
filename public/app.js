@@ -779,15 +779,17 @@ async function copyImageRecipe() {
     state.transportUrl = previewUrl;
     transportPreview.src = previewUrl;
     transportDownload.href = previewUrl;
-    const extension = isAnimated() ? 'apng' : 'png';
+    const animated = isAnimated();
+    const extension = 'png';
+    const formatLabel = animated ? 'APNG' : 'PNG';
     transportDownload.download = `image-buddy-transport.${extension}`;
     transportDetail.textContent =
       `${layout.canvasWidth} × ${layout.canvasHeight} · ${state.animation.frames.length} 帧 · ${state.colorMapping ? '色彩映射' : '原始色彩'} · ${recipeToken.length} 字符`;
     transportDebug.hidden = false;
-    if (isAnimated()) {
+    if (animated) {
       transportDownload.click();
       setNotice(
-        'APNG 已下载；请把下载文件作为图片或文件上传给图片仔。不要复制粘贴，剪贴板会丢失动图帧。',
+        'APNG 已下载为 .png 文件；请将它作为图片上传给图片仔。不要复制粘贴，剪贴板会丢失动图帧。',
         'success',
       );
       return;
@@ -796,14 +798,14 @@ async function copyImageRecipe() {
     const nativeCopied = clipboardPromise ? await clipboardPromise : false;
     if (!nativeCopied) {
       const reason = window.isSecureContext
-        ? `当前浏览器不支持 ${extension.toUpperCase()} 图片剪贴板或 iframe 未授权`
+        ? `当前浏览器不支持 ${formatLabel} 图片剪贴板或 iframe 未授权`
         : '当前 HTTP 调试页不是安全上下文';
       throw new Error(
-        `${reason}；请右键下方实际传输图选择“复制图片”，或下载 ${extension.toUpperCase()} 后发送`,
+        `${reason}；请右键下方实际传输图选择“复制图片”，或下载 ${formatLabel} 后发送`,
       );
     }
     setNotice(
-      `已通过原生 ${extension.toUpperCase()} 剪贴板复制带 QR 图片，请粘贴发送给图片仔`,
+      `已通过原生 ${formatLabel} 剪贴板复制带 QR 图片，请粘贴发送给图片仔`,
       'success',
     );
   } catch (error) {
