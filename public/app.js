@@ -142,7 +142,11 @@ async function upload() {
     setNotice(`上传成功 · ${formatBytes(result.size)}`, 'success');
     uploadLabel.textContent = '重新上传';
   } catch (error) {
-    setNotice(error.message || '上传失败，请稍后重试。');
+    const message =
+      error instanceof TypeError && error.message === 'Failed to fetch'
+        ? '无法连接本机服务。请先打开文档下方“备用入口”，接受开发证书后返回重试。'
+        : error.message || '上传失败，请稍后重试。';
+    setNotice(message);
     uploadLabel.textContent = '重试上传';
   } finally {
     spinner.hidden = true;

@@ -26,6 +26,7 @@ function json(response, statusCode, body) {
     'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-File-Name',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Private-Network': 'true',
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload),
     'Cache-Control': 'no-store',
@@ -217,6 +218,7 @@ async function handleRequest(request, response) {
         'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-File-Name',
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
         'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Private-Network': 'true',
         'Access-Control-Max-Age': '600',
       });
       response.end();
