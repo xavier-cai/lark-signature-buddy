@@ -108,7 +108,9 @@ export async function downloadMessageImage({
   runLark,
 }) {
   const directory = await mkdtemp('.image-buddy-');
-  const output = join(directory, 'source-image');
+  // lark-cli appends an extension inferred from Content-Type when --output has
+  // none, so always provide one and keep the path deterministic for readFile.
+  const output = join(directory, 'source-image.png');
   try {
     await runLark([
       'im',

@@ -3,9 +3,12 @@ import test from 'node:test';
 
 import QRCode from 'qrcode';
 import sharp from 'sharp';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 
-import { decodeRecipeFromImage } from './bot-image.mjs';
+import {
+  decodeRecipeFromImage,
+  downloadMessageImage,
+} from './bot-image.mjs';
 import {
   decodeImageBytes,
   encodeApngBytes,
@@ -185,6 +188,23 @@ test('groups image messages by chat, sender, and thread context', () => {
     eventBatchKey({ chat_id: 'oc_chat', sender_id: 'ou_user' }),
     eventBatchKey({ chat_id: 'oc_chat', sender_id: 'ou_other' }),
   );
+});
+
+test('downloads message images to an explicit extension path', async () => {
+  const expected = Buffer.from('downloaded image bytes');
+  let output;
+  const actual = await downloadMessageImage({
+    messageId: 'om_test',
+    imageKey: 'img_test',
+    profile: 'test-profile',
+    runLark: async (args) => {
+      output = args[args.indexOf('--output') + 1];
+      assert.match(output, /\.image-buddy-[^/]+\/source-image\.png$/);
+      await writeFile(output, expected);
+      return { data: { saved_path: output } };
+    },
+  });
+  assert.deepEqual(actual, expected);
 });
 
 const compactQrSize = qrSizeForModules(41);
