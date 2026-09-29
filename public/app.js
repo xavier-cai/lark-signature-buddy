@@ -517,33 +517,6 @@ function buildTransportImage() {
   return { blob, dataUrl, layout, recipeToken };
 }
 
-function legacyCopyImage(imageUrl) {
-  const container = document.createElement('div');
-  container.contentEditable = 'true';
-  container.setAttribute('aria-hidden', 'true');
-  Object.assign(container.style, {
-    position: 'fixed',
-    left: '-10000px',
-    top: '0',
-    opacity: '0.01',
-    pointerEvents: 'none',
-  });
-  const image = document.createElement('img');
-  image.src = imageUrl;
-  image.alt = '';
-  container.append(image);
-  document.body.append(container);
-  const selection = window.getSelection();
-  const range = document.createRange();
-  range.selectNodeContents(container);
-  selection.removeAllRanges();
-  selection.addRange(range);
-  const copied = document.execCommand('copy');
-  selection.removeAllRanges();
-  container.remove();
-  return copied;
-}
-
 function startAsyncCopyImage(blob) {
   if (!navigator.clipboard?.write || !window.ClipboardItem) return null;
   try {
@@ -572,15 +545,18 @@ async function copyImageRecipe() {
     transportDetail.textContent =
       `${layout.canvasWidth} × ${layout.canvasHeight} · ${recipeToken.length} 字符`;
     transportDebug.hidden = false;
-    const legacyCopied = legacyCopyImage(dataUrl);
     const clipboardPromise = startAsyncCopyImage(blob);
     const nativeCopied = clipboardPromise ? await clipboardPromise : false;
-    const copied = nativeCopied || legacyCopied;
-    if (!copied) {
-      throw new Error('当前飞书文档不允许复制图片');
+    if (!nativeCopied) {
+      const reason = window.isSecureContext
+        ? '当前 iframe 未授予图片剪贴板权限'
+        : '当前 HTTP 调试页不是安全上下文';
+      throw new Error(
+        `${reason}；请右键下方实际传输图选择“复制图片”，或下载 PNG 后发送`,
+      );
     }
     setNotice(
-      `已通过${nativeCopied ? '原生 PNG 剪贴板' : '兼容模式'}复制带 QR 图片，请粘贴发送给图片仔`,
+      '已通过原生 PNG 剪贴板复制带 QR 图片，请粘贴发送给图片仔',
       'success',
     );
   } catch (error) {

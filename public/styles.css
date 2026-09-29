@@ -544,6 +544,14 @@ h2 {
   object-fit: contain;
 }
 
+.transport-debug p {
+  margin: 8px 0 0;
+  color: #626876;
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: center;
+}
+
 .transport-debug a {
   display: block;
   margin-top: 9px;

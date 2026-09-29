@@ -60,6 +60,16 @@ function idempotencyKey(messageIds) {
   return `ib_${createHash('sha256').update(messageIds.join(',')).digest('hex').slice(0, 32)}`;
 }
 
+function userFacingDecodeError(error) {
+  if (
+    error.message.includes('99991672') ||
+    error.message.includes('im:message:readonly')
+  ) {
+    return '图片仔应用缺少 im:message:readonly 权限，暂时无法下载图片进行扫码。';
+  }
+  return error.message;
+}
+
 async function replyToBatch(batchKey) {
   const batch = batches.get(batchKey);
   if (!batch) return;
@@ -97,7 +107,7 @@ async function replyToBatch(batchKey) {
         imageKey: image.imageKey,
         error: error.message,
       });
-      text = `切图请求读取失败：${error.message}`;
+      text = `切图请求读取失败：${userFacingDecodeError(error)}`;
     }
   }
   try {
