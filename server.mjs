@@ -4,6 +4,7 @@ import { createServer as createSecureServer } from 'node:https';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -262,7 +263,10 @@ async function handleRequest(request, response) {
   }
 }
 
-if (fileURLToPath(import.meta.url) === process.argv[1]) {
+const modulePath = realpathSync(fileURLToPath(import.meta.url));
+const entryPath = process.argv[1] ? realpathSync(process.argv[1]) : '';
+
+if (modulePath === entryPath) {
   const useTls = Boolean(TLS_CERT_FILE && TLS_KEY_FILE);
   const server = useTls
     ? createSecureServer(
