@@ -4,94 +4,140 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
-    <title>图片仔 · 飞书图片上传</title>
+    <title>图片仔 · 网格切图上传</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="shell">
-      <header class="hero">
-        <div class="brand-mark" aria-hidden="true">
-          <span></span><span></span><span></span>
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div>
+            <p class="eyebrow">IMAGE BUDDY</p>
+            <h1>网格切图与飞书上传</h1>
+            <p class="intro">同屏调整选区、网格和间隔预裁剪，一次生成全部 Image Key。</p>
+          </div>
         </div>
-        <div>
-          <p class="eyebrow">IMAGE BUDDY</p>
-          <h1>把图片变成飞书 Image Key</h1>
-          <p class="intro">选择、拖入或粘贴图片。上传完成后，可直接复制 Key 或生成妙笔链接。</p>
-        </div>
+        <button class="upload-button" id="upload-button" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v3.2A2.8 2.8 0 0 0 7.8 20h8.4a2.8 2.8 0 0 0 2.8-2.8V14" />
+          </svg>
+          <span id="upload-button-label">上传图片</span>
+        </button>
+        <input
+          id="file-input"
+          type="file"
+          accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.ico,.tif,.tiff,.heic,image/*"
+          hidden
+        />
       </header>
 
-      <section class="workspace">
-        <div class="upload-column">
-          <button class="drop-zone" id="drop-zone" type="button">
+      <section class="editor-layout">
+        <div class="canvas-panel">
+          <button class="empty-stage" id="empty-stage" type="button">
             <span class="upload-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" role="img">
-                <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v3.2A2.8 2.8 0 0 0 7.8 20h8.4a2.8 2.8 0 0 0 2.8-2.8V14" />
-              </svg>
+              <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v3.2A2.8 2.8 0 0 0 7.8 20h8.4a2.8 2.8 0 0 0 2.8-2.8V14" /></svg>
             </span>
             <strong>拖入图片，或点击选择</strong>
-            <span>也可以直接粘贴剪贴板中的图片</span>
+            <span>也可以粘贴剪贴板图片</span>
             <small>JPG · PNG · WEBP · GIF · BMP · ICO · TIFF · HEIC，最大 10 MB</small>
           </button>
-          <input
-            id="file-input"
-            type="file"
-            accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.ico,.tif,.tiff,.heic,image/*"
-            hidden
-          />
 
-          <article class="preview-card" id="preview-card" hidden>
-            <div class="preview-frame">
-              <img id="preview-image" alt="待上传图片预览" />
-            </div>
-            <div class="file-meta">
-              <strong id="file-name"></strong>
-              <span id="file-detail"></span>
-            </div>
-            <button class="quiet-button" id="replace-button" type="button">换一张</button>
-          </article>
+          <div class="canvas-stage" id="canvas-stage" hidden>
+            <canvas id="editor-canvas"></canvas>
+            <div class="canvas-tip">拖动网格定位 · 拖动四角等比缩放</div>
+          </div>
 
-          <div class="notice" id="notice" role="status" aria-live="polite"></div>
-          <button class="primary-button" id="upload-button" type="button" disabled>
-            <span id="upload-label">选择图片后上传</span>
-            <span class="spinner" id="spinner" hidden aria-hidden="true"></span>
-          </button>
+          <div class="file-bar">
+            <div>
+              <strong id="file-name">尚未选择图片</strong>
+              <span id="file-detail">上传入口会始终保留在右上角</span>
+            </div>
+            <button class="text-button" id="reset-grid" type="button" disabled>重置网格</button>
+          </div>
         </div>
 
-        <aside class="result-panel" id="result-panel">
-          <div class="result-empty" id="result-empty">
-            <span class="result-orbit" aria-hidden="true"></span>
-            <strong>结果会出现在这里</strong>
-            <p>上传完成后，Image Key 和妙笔链接都可以一键复制。</p>
-          </div>
-
-          <div class="result-content" id="result-content" hidden>
-            <div class="success-badge">上传成功</div>
-            <label for="image-key">Image Key</label>
-            <div class="copy-row">
-              <input id="image-key" readonly />
-              <button class="copy-button" data-copy-target="image-key" type="button">复制</button>
+        <aside class="control-panel">
+          <section class="control-section">
+            <div class="section-heading">
+              <div>
+                <p class="step-label">网格</p>
+                <h2>选择切图规格</h2>
+              </div>
+              <span class="tile-count" id="tile-count">4 张</span>
             </div>
-
-            <div class="divider"></div>
-
-            <label for="link-title">链接标题</label>
-            <input id="link-title" class="field" placeholder="例如：今天也要勇攀高峰" />
-
-            <label for="target-url">跳转地址 <span>可选</span></label>
-            <input id="target-url" class="field" type="url" placeholder="https://..." />
-
-            <label for="magic-link">妙笔链接</label>
-            <div class="copy-row">
-              <textarea id="magic-link" rows="3" readonly></textarea>
-              <button class="copy-button" data-copy-target="magic-link" type="button">复制</button>
+            <div class="grid-options" id="grid-options" role="radiogroup" aria-label="网格规格">
+              <button type="button" data-grid="1x2">1 × 2</button>
+              <button type="button" data-grid="2x1">2 × 1</button>
+              <button type="button" data-grid="2x2" class="selected">2 × 2</button>
+              <button type="button" data-grid="2x3">2 × 3</button>
+              <button type="button" data-grid="3x2">3 × 2</button>
+              <button type="button" data-grid="3x3">3 × 3</button>
             </div>
-          </div>
+          </section>
+
+          <section class="control-section">
+            <p class="step-label">模式</p>
+            <div class="mode-options" id="mode-options">
+              <label class="mode-card">
+                <input type="radio" name="mode" value="plain" checked />
+                <span>
+                  <strong>无间隔</strong>
+                  <small>连续切分，不为展示缝隙额外裁掉内容</small>
+                </span>
+              </label>
+              <label class="mode-card">
+                <input type="radio" name="mode" value="precut" />
+                <span>
+                  <strong>预裁剪间隔</strong>
+                  <small>预先裁掉网格缝隙，最终组合更接近原图</small>
+                </span>
+              </label>
+            </div>
+            <div class="gap-control" id="gap-control" hidden>
+              <div class="range-heading">
+                <label for="gap-ratio">间隔 / 子图边长</label>
+                <output id="gap-output">58%</output>
+              </div>
+              <input id="gap-ratio" type="range" min="0" max="100" value="58" />
+              <p>默认值按你提供的 2×2 实际渲染截图估算，可实时微调。</p>
+            </div>
+          </section>
+
+          <section class="control-section preview-section">
+            <div class="section-heading compact">
+              <div>
+                <p class="step-label">预览</p>
+                <h2>最终组合效果</h2>
+              </div>
+            </div>
+            <div class="output-preview" id="output-preview">
+              <span>选择图片后显示</span>
+            </div>
+          </section>
+
+          <div class="notice" id="notice" role="status" aria-live="polite"></div>
+          <button class="generate-button" id="generate-button" type="button" disabled>
+            <span id="generate-label">选择图片后生成</span>
+            <span class="spinner" id="spinner" hidden aria-hidden="true"></span>
+          </button>
         </aside>
+      </section>
+
+      <section class="results" id="results" hidden>
+        <div class="results-heading">
+          <div>
+            <p class="eyebrow">UPLOAD COMPLETE</p>
+            <h2>切图与 Image Key</h2>
+          </div>
+          <button class="copy-all-button" id="copy-all-button" type="button">复制全部 Key</button>
+        </div>
+        <div class="result-grid" id="result-grid"></div>
       </section>
 
       <footer>
         <span class="status-dot"></span>
-        <span>由本机 image-buddy 服务上传；应用密钥不会进入浏览器。</span>
+        <span>切图在浏览器内完成；生成后的子图由本机 image-buddy 服务上传。</span>
       </footer>
     </main>
 

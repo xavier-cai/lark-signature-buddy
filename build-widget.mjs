@@ -9,11 +9,17 @@ if (!API_URL) {
   throw new Error('IMAGE_BUDDY_API_URL is required');
 }
 
-const [template, css, js] = await Promise.all([
+const [template, css, gridCore, js] = await Promise.all([
   readFile(join(ROOT, 'public', 'index.html'), 'utf8'),
   readFile(join(ROOT, 'public', 'styles.css'), 'utf8'),
+  readFile(join(ROOT, 'public', 'grid-core.js'), 'utf8'),
   readFile(join(ROOT, 'public', 'app.js'), 'utf8'),
 ]);
+
+const bundledScript = `${gridCore.replaceAll('export ', '')}\n${js.replace(
+  "import { fitCrop, parseGrid, selectionAspect, tileRects } from './grid-core.js';\n\n",
+  '',
+)}`;
 
 const output = template
   .replace(
@@ -25,7 +31,10 @@ const output = template
     <meta name="image-buddy-api" content="${API_URL.replaceAll('&', '&amp;')}" />`,
   )
   .replace('<link rel="stylesheet" href="./styles.css" />', `<style>${css}</style>`)
-  .replace('<script type="module" src="./app.js"></script>', `<script type="module">${js}</script>`);
+  .replace(
+    '<script type="module" src="./app.js"></script>',
+    `<script type="module">${bundledScript}</script>`,
+  );
 
 await mkdir(join(ROOT, 'dist'), { recursive: true });
 await writeFile(join(ROOT, 'dist', 'image-buddy-widget.html'), output, 'utf8');

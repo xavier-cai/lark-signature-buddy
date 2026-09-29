@@ -202,13 +202,13 @@ async function handleRequest(request, response) {
 
     if (
       request.method === 'GET' &&
-      ['/app.js', '/styles.css'].includes(requestUrl.pathname)
+      ['/app.js', '/grid-core.js', '/styles.css'].includes(requestUrl.pathname)
     ) {
-      const isScript = requestUrl.pathname === '/app.js';
+      const isStyle = requestUrl.pathname === '/styles.css';
       await serveAsset(
         response,
-        isScript ? 'app.js' : 'styles.css',
-        isScript ? 'text/javascript; charset=utf-8' : 'text/css; charset=utf-8',
+        requestUrl.pathname.slice(1),
+        isStyle ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8',
       );
       return;
     }
