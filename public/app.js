@@ -11,12 +11,14 @@ import {
   tileRects,
 } from './grid-core.js';
 import {
-  isAnimatedImageBytes,
-  validateStaticImageSize,
-} from './image-format.js';
+  decodeImageFrames,
+  encodeGifFrames,
+  frameToCanvas,
+} from './animation-core.js';
 import {
-  QR_LABEL_HEIGHT,
-  QR_MARGIN,
+  QR_QUIET_ZONE_MODULES,
+  QR_MIN_MODULE_PIXELS,
+  qrSizeForModules,
   transportLayoutForSource,
 } from './transport-core.js';
 
@@ -55,20 +57,23 @@ const state = {
   file: null,
   image: null,
   imageUrl: null,
+  animation: null,
   grid: '2x2',
   mode: 'plain',
   gapRatio: 0.58,
   crop: null,
   display: null,
   drag: null,
+  transportUrl: null,
 };
 
 function updateCopyLabel() {
   if (!state.image) {
-    generateLabel.textContent = '选择图片后即可生成带 QR 图片';
+    generateLabel.textContent = '选择图片后即可生成传输图片';
     return;
   }
-  generateLabel.textContent = '复制原图 + QR 参数条';
+  generateLabel.textContent =
+    state.animation?.frames.length > 1 ? '生成并复制 GIF 动图' : '生成并复制 PNG 图片';
 }
 
 function formatBytes(size) {
@@ -83,13 +88,17 @@ function setNotice(message = '', type = 'error') {
 }
 
 function isSupported(file) {
-  const extensions = /\.(jpe?g|png|webp|bmp|ico|tiff?|heic)$/i;
+  const extensions = /\.(jpe?g|png|webp|gif|apng|bmp|ico|tiff?|heic)$/i;
   return file.type.startsWith('image/') || extensions.test(file.name);
 }
 
-async function isAnimatedImage(file) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  return isAnimatedImageBytes(bytes);
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('浏览器无法显示图片首帧'));
+    image.src = url;
+  });
 }
 
 function currentGrid() {
@@ -127,35 +136,34 @@ async function chooseFile(file) {
     setNotice('图片超过 10 MB，请压缩后再上传。');
     return;
   }
-  let animated;
+  let animation;
   try {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    animated = isAnimatedImageBytes(bytes);
-  } catch {
-    setNotice('无法读取图片内容，请换一张图片。');
-    return;
-  }
-  if (animated) {
-    setNotice('当前 V1 暂不支持 GIF、APNG 或 Animated WebP 动图。');
+    animation = await decodeImageFrames(file);
+  } catch (error) {
+    setNotice(error.message || '无法读取图片内容，请换一张图片。');
     return;
   }
 
-  if (state.imageUrl) URL.revokeObjectURL(state.imageUrl);
-  const imageUrl = URL.createObjectURL(file);
-  const image = new Image();
-  image.onload = () => {
-    try {
-      validateStaticImageSize(image.naturalWidth, image.naturalHeight);
-    } catch (error) {
-      URL.revokeObjectURL(imageUrl);
-      setNotice(error.message);
-      return;
-    }
+  if (state.imageUrl?.startsWith('blob:')) URL.revokeObjectURL(state.imageUrl);
+  if (state.transportUrl) {
+    URL.revokeObjectURL(state.transportUrl);
+    state.transportUrl = null;
+  }
+  const firstFrame = frameToCanvas(
+    animation.frames[0],
+    animation.width,
+    animation.height,
+  );
+  const imageUrl = firstFrame.toDataURL('image/png');
+  try {
+    const image = await loadImage(imageUrl);
     state.file = file;
     state.image = image;
     state.imageUrl = imageUrl;
+    state.animation = animation;
     fileName.textContent = file.name || '粘贴的图片';
-    fileDetail.textContent = `${image.naturalWidth} × ${image.naturalHeight} · ${formatBytes(file.size)}`;
+    fileDetail.textContent =
+      `${image.naturalWidth} × ${image.naturalHeight} · ${animation.frames.length} 帧 · ${formatBytes(file.size)}`;
     uploadButtonLabel.textContent = '换一张图片';
     emptyStage.hidden = true;
     canvasStage.hidden = false;
@@ -164,12 +172,9 @@ async function chooseFile(file) {
     transportDebug.hidden = true;
     updateCopyLabel();
     resetCrop();
-  };
-  image.onerror = () => {
-    URL.revokeObjectURL(imageUrl);
-    setNotice('浏览器无法解码该图片，请换成 JPG、PNG、WEBP 或 GIF。');
-  };
-  image.src = imageUrl;
+  } catch (error) {
+    setNotice(error.message);
+  }
 }
 
 function layoutCanvas() {
@@ -431,6 +436,7 @@ function currentRecipeToken(layout) {
     createImageRecipe({
       sourceWidth: state.image.naturalWidth,
       sourceHeight: state.image.naturalHeight,
+      sourceFrames: state.animation.frames.length,
       cols,
       rows,
       crop: state.crop,
@@ -449,9 +455,9 @@ function currentRecipeToken(layout) {
 
 function drawQr(context, token, x, y, size) {
   const qr = QRCode.create(token, { errorCorrectionLevel: 'H' });
-  const margin = 4;
+  const margin = QR_QUIET_ZONE_MODULES;
   const cells = qr.modules.size + margin * 2;
-  const scale = Math.max(1, Math.floor(size / cells));
+  const scale = Math.max(QR_MIN_MODULE_PIXELS, Math.floor(size / cells));
   const renderedSize = cells * scale;
   const left = x + Math.floor((size - renderedSize) / 2);
   const top = y + Math.floor((size - renderedSize) / 2);
@@ -471,58 +477,89 @@ function drawQr(context, token, x, y, size) {
   }
 }
 
-function dataUrlToBlob(dataUrl) {
-  const [metadata, encoded] = dataUrl.split(',');
-  const mime = /data:([^;]+)/.exec(metadata)?.[1] || 'image/png';
-  const bytes = Uint8Array.from(atob(encoded), (character) =>
-    character.charCodeAt(0),
-  );
-  return new Blob([bytes], { type: mime });
-}
-
-function buildTransportImage() {
+async function buildTransportImage() {
+  const placeholderLayout = {
+    canvasWidth: state.image.naturalWidth,
+    canvasHeight: state.image.naturalHeight + 1,
+    sourceX: 0,
+    sourceY: 0,
+    sourceWidth: state.image.naturalWidth,
+    sourceHeight: state.image.naturalHeight,
+  };
+  const placeholderToken = currentRecipeToken(placeholderLayout);
+  const qrModules = QRCode.create(placeholderToken, {
+    errorCorrectionLevel: 'H',
+  }).modules.size;
+  const qrSize = qrSizeForModules(qrModules);
   const layout = transportLayoutForSource(
     state.image.naturalWidth,
     state.image.naturalHeight,
+    qrSize,
   );
   const recipeToken = currentRecipeToken(layout);
-  const canvas = document.createElement('canvas');
-  canvas.width = layout.canvasWidth;
-  canvas.height = layout.canvasHeight;
-  const context = canvas.getContext('2d');
-  context.fillStyle = '#ffffff';
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(state.image, layout.sourceX, layout.sourceY);
-  context.fillStyle = '#1f2937';
-  context.font = '600 16px system-ui, sans-serif';
-  context.textAlign = 'center';
-  context.textBaseline = 'middle';
-  context.fillText(
-    'IMAGE BUDDY · V1',
-    layout.canvasWidth / 2,
-    layout.sourceHeight + QR_MARGIN + QR_LABEL_HEIGHT / 2,
-  );
-  drawQr(
-    context,
-    recipeToken,
-    Math.round((layout.canvasWidth - layout.qrSize) / 2),
-    layout.sourceHeight + QR_MARGIN + QR_LABEL_HEIGHT,
-    layout.qrSize,
-  );
-  const dataUrl = canvas.toDataURL('image/png');
-  const blob = dataUrlToBlob(dataUrl);
-  if (blob.size > 20 * 1024 * 1024) {
-    throw new Error('传输 PNG 超过 20 MB，请缩小图片后重试');
+  const frames = state.animation.frames.map((frame) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = layout.canvasWidth;
+    canvas.height = layout.canvasHeight;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(
+      frameToCanvas(frame, layout.sourceWidth, layout.sourceHeight),
+      layout.sourceX,
+      layout.sourceY,
+    );
+    drawQr(
+      context,
+      recipeToken,
+      Math.round((layout.canvasWidth - layout.qrSize) / 2),
+      layout.sourceHeight,
+      layout.qrSize,
+    );
+    return {
+      data: context.getImageData(0, 0, canvas.width, canvas.height).data,
+      delay: frame.delay,
+    };
+  });
+  let blob;
+  if (state.animation.frames.length === 1) {
+    const canvas = frameToCanvas(
+      frames[0],
+      layout.canvasWidth,
+      layout.canvasHeight,
+    );
+    blob = await new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (value) => (value ? resolve(value) : reject(new Error('无法生成传输 PNG'))),
+        'image/png',
+      );
+    });
+  } else {
+    blob = await encodeGifFrames({
+      width: layout.canvasWidth,
+      height: layout.canvasHeight,
+      frames,
+      loop: state.animation.loop,
+    });
   }
-  return { blob, dataUrl, layout, recipeToken };
+  if (blob.size > 20 * 1024 * 1024) {
+    throw new Error('传输图片超过 20 MB，请缩小图片或减少帧数后重试');
+  }
+  return {
+    blob,
+    previewUrl: URL.createObjectURL(blob),
+    layout,
+    recipeToken,
+  };
 }
 
 function startAsyncCopyImage(blob) {
   if (!navigator.clipboard?.write || !window.ClipboardItem) return null;
+  if (window.ClipboardItem.supports?.(blob.type) === false) return null;
   try {
     return navigator.clipboard
       .write([
-        new ClipboardItem({ 'image/png': blob }),
+        new ClipboardItem({ [blob.type]: blob }),
       ])
       .then(
         () => true,
@@ -539,24 +576,29 @@ async function copyImageRecipe() {
   spinner.hidden = false;
   setNotice();
   try {
-    const { blob, dataUrl, layout, recipeToken } = buildTransportImage();
-    transportPreview.src = dataUrl;
-    transportDownload.href = dataUrl;
+    const { blob, previewUrl, layout, recipeToken } =
+      await buildTransportImage();
+    if (state.transportUrl) URL.revokeObjectURL(state.transportUrl);
+    state.transportUrl = previewUrl;
+    transportPreview.src = previewUrl;
+    transportDownload.href = previewUrl;
+    const extension = blob.type === 'image/gif' ? 'gif' : 'png';
+    transportDownload.download = `image-buddy-transport.${extension}`;
     transportDetail.textContent =
-      `${layout.canvasWidth} × ${layout.canvasHeight} · ${recipeToken.length} 字符`;
+      `${layout.canvasWidth} × ${layout.canvasHeight} · ${state.animation.frames.length} 帧 · ${recipeToken.length} 字符`;
     transportDebug.hidden = false;
     const clipboardPromise = startAsyncCopyImage(blob);
     const nativeCopied = clipboardPromise ? await clipboardPromise : false;
     if (!nativeCopied) {
       const reason = window.isSecureContext
-        ? '当前 iframe 未授予图片剪贴板权限'
+        ? `当前浏览器不支持 ${extension.toUpperCase()} 图片剪贴板或 iframe 未授权`
         : '当前 HTTP 调试页不是安全上下文';
       throw new Error(
-        `${reason}；请右键下方实际传输图选择“复制图片”，或下载 PNG 后发送`,
+        `${reason}；请右键下方实际传输图选择“复制图片”，或下载 ${extension.toUpperCase()} 后发送`,
       );
     }
     setNotice(
-      '已通过原生 PNG 剪贴板复制带 QR 图片，请粘贴发送给图片仔',
+      `已通过原生 ${extension.toUpperCase()} 剪贴板复制带 QR 图片，请粘贴发送给图片仔`,
       'success',
     );
   } catch (error) {

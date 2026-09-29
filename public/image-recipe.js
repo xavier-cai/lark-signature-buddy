@@ -1,14 +1,17 @@
 export const IMAGE_RECIPE_NAME = 'image-buddy-recipe';
-export const IMAGE_RECIPE_VERSION = 1;
+export const IMAGE_RECIPE_VERSION = 2;
 export const IMAGE_RECIPE_PREFIX = `IB${IMAGE_RECIPE_VERSION}:`;
-export const IMAGE_RECIPE_BYTE_LENGTH = 39;
+export const IMAGE_RECIPE_BYTE_LENGTH = 41;
 export const IMAGE_RECIPE_TOKEN_MAX_LENGTH = 64;
 
 const MODE_TO_CODE = new Map([
   ['plain', 0],
   ['precut', 1],
 ]);
-const FORMAT_PNG = 0;
+const FORMAT_TO_CODE = new Map([
+  ['png', 0],
+  ['gif', 1],
+]);
 const NORMALIZED_MAX = 65535;
 
 function fail(message) {
@@ -112,9 +115,16 @@ export function validateImageRecipe(value) {
     fail(`仅支持 V${IMAGE_RECIPE_VERSION}，收到 V${String(value.version)}`);
   }
 
-  assertExactKeys(value.source, ['width', 'height'], 'source');
+  assertExactKeys(value.source, ['width', 'height', 'animated', 'frames'], 'source');
   assertInteger(value.source.width, 1, 100000, 'source.width');
   assertInteger(value.source.height, 1, 100000, 'source.height');
+  if (typeof value.source.animated !== 'boolean') {
+    fail('source.animated 必须是 boolean');
+  }
+  assertInteger(value.source.frames, 1, 120, 'source.frames');
+  if (value.source.animated !== (value.source.frames > 1)) {
+    fail('source.animated 与 source.frames 不一致');
+  }
 
   assertExactKeys(value.grid, ['cols', 'rows'], 'grid');
   assertInteger(value.grid.cols, 1, 15, 'grid.cols');
@@ -127,8 +137,13 @@ export function validateImageRecipe(value) {
   assertExactKeys(value.output, ['width', 'height', 'format'], 'output');
   assertInteger(value.output.width, 1, 4096, 'output.width');
   assertInteger(value.output.height, 1, 4096, 'output.height');
-  if (value.output.width !== value.output.height) fail('V1 仅支持正方形输出');
-  if (value.output.format !== 'png') fail('output.format 必须是 png');
+  if (value.output.width !== value.output.height) fail('V2 仅支持正方形输出');
+  if (!FORMAT_TO_CODE.has(value.output.format)) {
+    fail('output.format 必须是 png 或 gif');
+  }
+  if (value.source.animated !== (value.output.format === 'gif')) {
+    fail('静态输入必须输出 png，动图输入必须输出 gif');
+  }
   assertExactKeys(value.transport, ['contentRect'], 'transport');
   assertRect(value.transport.contentRect, 'transport.contentRect');
   return value;
@@ -137,6 +152,7 @@ export function validateImageRecipe(value) {
 export function createImageRecipe({
   sourceWidth,
   sourceHeight,
+  sourceFrames,
   cols,
   rows,
   crop,
@@ -148,7 +164,12 @@ export function createImageRecipe({
   return validateImageRecipe({
     protocol: IMAGE_RECIPE_NAME,
     version: IMAGE_RECIPE_VERSION,
-    source: { width: sourceWidth, height: sourceHeight },
+    source: {
+      width: sourceWidth,
+      height: sourceHeight,
+      animated: sourceFrames > 1,
+      frames: sourceFrames,
+    },
     grid: { cols, rows },
     crop: {
       x: quantizeNormalized(crop.x),
@@ -158,7 +179,11 @@ export function createImageRecipe({
     },
     mode,
     gapRatio: quantizeNormalized(gapRatio),
-    output: { width: outputSize, height: outputSize, format: 'png' },
+    output: {
+      width: outputSize,
+      height: outputSize,
+      format: sourceFrames > 1 ? 'gif' : 'png',
+    },
     transport: {
       contentRect: {
         x: quantizeNormalized(contentRect.x),
@@ -177,7 +202,7 @@ export function encodeImageRecipe(recipe) {
   bytes[0] = 0x49;
   bytes[1] = 0x42;
   bytes[2] = IMAGE_RECIPE_VERSION;
-  bytes[3] = MODE_TO_CODE.get(value.mode);
+  bytes[3] = MODE_TO_CODE.get(value.mode) | (value.source.animated ? 0x80 : 0);
   view.setUint32(4, value.source.width);
   view.setUint32(8, value.source.height);
   bytes[12] = value.grid.cols;
@@ -197,8 +222,9 @@ export function encodeImageRecipe(recipe) {
     view.setUint16(14 + index * 2, normalizedToUint16(number));
   });
   view.setUint16(32, value.output.width);
-  bytes[34] = FORMAT_PNG;
-  view.setUint32(35, crc32(bytes.subarray(0, 35)));
+  bytes[34] = FORMAT_TO_CODE.get(value.output.format);
+  view.setUint16(35, value.source.frames);
+  view.setUint32(37, crc32(bytes.subarray(0, 37)));
   const token = `${IMAGE_RECIPE_PREFIX}${encodeBase64Url(bytes)}`;
   if (token.length > IMAGE_RECIPE_TOKEN_MAX_LENGTH) fail('编码超过长度上限');
   return token;
@@ -218,10 +244,12 @@ export function decodeImageRecipe(token) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (bytes[0] !== 0x49 || bytes[1] !== 0x42) fail('magic 不匹配');
   if (bytes[2] !== markerVersion) fail('协议标记与 payload 版本不一致');
-  if (view.getUint32(35) !== crc32(bytes.subarray(0, 35))) fail('CRC32 校验失败');
-  const mode = [...MODE_TO_CODE].find(([, code]) => code === bytes[3])?.[0];
+  if (view.getUint32(37) !== crc32(bytes.subarray(0, 37))) fail('CRC32 校验失败');
+  const modeCode = bytes[3] & 0x7f;
+  const mode = [...MODE_TO_CODE].find(([, code]) => code === modeCode)?.[0];
   if (!mode) fail('mode 编码未知');
-  if (bytes[34] !== FORMAT_PNG) fail('output.format 编码未知');
+  const format = [...FORMAT_TO_CODE].find(([, code]) => code === bytes[34])?.[0];
+  if (!format) fail('output.format 编码未知');
 
   const normalized = Array.from({ length: 9 }, (_, index) =>
     uint16ToNormalized(view.getUint16(14 + index * 2)),
@@ -229,7 +257,12 @@ export function decodeImageRecipe(token) {
   return validateImageRecipe({
     protocol: IMAGE_RECIPE_NAME,
     version: bytes[2],
-    source: { width: view.getUint32(4), height: view.getUint32(8) },
+    source: {
+      width: view.getUint32(4),
+      height: view.getUint32(8),
+      animated: Boolean(bytes[3] & 0x80),
+      frames: view.getUint16(35),
+    },
     grid: { cols: bytes[12], rows: bytes[13] },
     crop: {
       x: normalized[0],
@@ -242,7 +275,7 @@ export function decodeImageRecipe(token) {
     output: {
       width: view.getUint16(32),
       height: view.getUint16(32),
-      format: 'png',
+      format,
     },
     transport: {
       contentRect: {

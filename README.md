@@ -10,7 +10,8 @@ image-buddy-local/
 │   ├── index.html       # 切图页面
 │   ├── app.js           # 选区与剪贴板交互
 │   ├── image-recipe.js  # 前端与 Bot 共用的严格版本协议
-│   ├── image-format.js  # 静态图格式与尺寸检查
+│   ├── image-format.js  # 静态图/动图格式与尺寸检查
+│   ├── animation-core.js # GIF/APNG/WebP 解码与 GIF 编码
 │   ├── transport-core.js # 传输画布与 QR 尺寸计算
 │   ├── grid-core.js     # 网格与裁剪算法
 │   └── styles.css       # 页面样式
@@ -20,6 +21,8 @@ image-buddy-local/
 ├── bot-tiles.mjs        # 服务端切图、上传与顺序编排
 ├── build-widget.mjs     # 构建单文件 HTML5 Block
 ├── project.test.mjs     # 算法与 Bot 逻辑测试
+├── test-fixtures/
+│   └── animated-apng.png # APNG 多帧回归样例
 ├── systemd/
 │   └── image-buddy-bot.service
 └── package.json
@@ -29,14 +32,15 @@ image-buddy-local/
 
 1. 在飞书文档的 HTML5 Block 中上传、拖拽或粘贴原图。
 2. 输入列数和行数（各 1–15），调整选区、模式与渲染间隔。
-3. 点击主按钮，生成“原图区域 + 底部 QR 参数条”的单张 PNG 并复制。
+3. 点击主按钮，生成“原图区域 + 紧凑 QR”的传输图片。静态图输出 PNG，
+   动图统一输出 GIF。
 4. 粘贴发送给“图片仔”Bot。
-5. Bot 下载图片，扫描并严格校验 V1 协议，按同一套网格算法生成子图。
+5. Bot 下载图片，扫描并严格校验 V2 协议，按同一套网格算法生成子图。
 6. Bot 将子图逐张上传到飞书，并回复全部 `image_key` 和对应妙笔链接。
 
-浏览器剪贴板无法可靠地一次写入多张独立图片，因此前端只复制一张视觉内容和
-切图参数合成后的 PNG。原图不缩放；宽度不足 384 px 时左右补白，底部追加
-高纠错 QR 参数区。后续由 Bot 使用同一份协议和网格算法生成子图，避免两端
+浏览器剪贴板无法可靠地一次写入多张独立图片，因此前端只生成一张视觉内容和
+切图参数合成后的传输图片。原图不缩放；宽度不足 384 px 时左右补白，底部追加
+紧凑高纠错 QR。后续由 Bot 使用同一份协议和网格算法生成子图，避免两端
 对参数理解不同。
 
 ## 共享切图协议
@@ -47,34 +51,39 @@ image-buddy-local/
 - 构建 HTML5 Block 时，它会与页面脚本一起内联。
 - Bot 直接导入它来提取、解码和严格校验 payload。
 
-当前只支持紧凑二进制 `IB1`。协议标记、payload 版本、字段集合或参数范围
+当前只支持紧凑二进制 `IB2`。协议标记、payload 版本、字段集合或参数范围
 不一致时直接报错，不做向前或向后兼容。
 
-V1 字段包含：
+V2 字段包含：
 
 - 原图宽高
+- 静态/动图标记与帧数
 - 网格行列数
 - 归一化选区 `x/y/width/height`
 - `plain` / `precut` 模式
 - 间隔比例
 - 目标子图宽高和格式
 
-编码后的 V1 token 固定不超过 64 个 ASCII 字符，写入纠错等级 H 的二维码。
+编码后的 V2 token 固定不超过 64 个 ASCII 字符，写入纠错等级 H 的二维码。
 payload 额外记录原图在传输画布中的归一化 `contentRect`，Bot 后续可先剥离
-padding 和 QR 区域，再对原图执行切分。切片结果按从左到右、从上到下排序。
+padding 和 QR 区域，再对原图执行切分。QR 不带标题和额外留白，仅保留标准
+4-module quiet zone；当前协议为 41 modules，按 1 px/module 约 49×49 px。
+切片结果按从左到右、从上到下排序。
 
-V1 暂不支持 GIF、APNG 或 Animated WebP。其他静态格式会在浏览器中转成 PNG
-传输画布；原图区域保持原像素大小，只在画布层增加 padding 和 QR 区域。最大边长
-8192 px、最大 32 MP，传输 PNG 不超过 20 MB。
+V2 支持 GIF、APNG 和 Animated WebP：GIF 使用内置解码器，APNG 使用 UPNG，
+Animated WebP 使用 Chromium `ImageDecoder`。动图统一编码为 GIF，保留帧时长
+和循环信息；静态输入仍输出 PNG。最多 120 帧、80 MP 总帧像素工作量、20 MB
+传输文件。运行时不支持 Animated WebP 解码时会明确提示改用 GIF/APNG。
 
 Bot 最多接受 15×15（225 张）切片，使用 4 个 worker 执行“裁剪一张 → 写入
-临时 PNG → 上传 → 删除临时文件”。每张子图输出为 512×512 PNG。只有整批上传
+临时文件 → 上传 → 删除临时文件”。静态子图输出 512×512 PNG，动图子图输出
+512×512 GIF；帧时长和循环信息保持不变。只有整批上传
 成功才回复妙笔链接；中途失败会返回批次错误，不返回不完整链接列表。
 
 页面在每次复制后显示“本次实际复制的传输图”、画布尺寸、协议长度和下载链接，
 方便区分生成问题与粘贴链路问题。只有原生 `ClipboardItem(image/png)` 写入成功
-才提示自动复制成功；HTTP 非安全上下文或 iframe 未授权时会明确要求右键复制预览图，
-不再把 `execCommand('copy')` 的返回值当成图片复制成功。
+才提示自动复制成功；GIF 剪贴板不受浏览器支持时、HTTP 非安全上下文或 iframe
+未授权时，会明确要求右键复制预览图或下载 GIF，不会静默降成首帧。
 
 ## 构建文档组件
 

@@ -5,29 +5,33 @@ import jsQR from 'jsqr';
 import sharp from 'sharp';
 
 import { decodeImageRecipe } from './public/image-recipe.js';
-import { isAnimatedImageBytes } from './public/image-format.js';
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
-const MAX_IMAGE_PIXELS = 40 * 1024 * 1024;
+const MAX_IMAGE_PIXELS = 80 * 1024 * 1024;
 
 export async function decodeRecipeFromImage(input) {
   if (!input || input.length === 0) throw new Error('下载的图片为空');
   if (input.length > MAX_IMAGE_BYTES) throw new Error('图片超过 20 MB 处理上限');
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
-  if (isAnimatedImageBytes(bytes)) throw new Error('当前 V1 暂不支持动图');
 
-  const image = sharp(bytes, {
-    animated: false,
+  const animatedImage = sharp(bytes, {
+    animated: true,
     limitInputPixels: MAX_IMAGE_PIXELS,
     failOn: 'warning',
   });
-  const metadata = await image.metadata();
+  const metadata = await animatedImage.metadata();
   const width = metadata.width || 0;
-  const height = metadata.height || 0;
-  const scanHeight = Math.min(height, 1024);
-  let scanner = image.extract({
+  const pageHeight = metadata.pageHeight || metadata.height || 0;
+  const pages = metadata.pages || 1;
+  const scanHeight = Math.min(pageHeight, 1024);
+  let scanner = sharp(bytes, {
+    page: 0,
+    pages: 1,
+    limitInputPixels: MAX_IMAGE_PIXELS,
+    failOn: 'warning',
+  }).extract({
     left: 0,
-    top: height - scanHeight,
+    top: pageHeight - scanHeight,
     width,
     height: scanHeight,
   });
@@ -45,13 +49,22 @@ export async function decodeRecipeFromImage(input) {
     inversionAttempts: 'dontInvert',
   });
   if (!qr?.data) throw new Error('未识别到 Image Buddy QR 参数');
+  const recipe = decodeImageRecipe(qr.data);
+  if (recipe.source.frames !== pages) {
+    throw new Error(
+      `动图帧数不一致：参数 ${recipe.source.frames} 帧，飞书下载结果 ${pages} 帧`,
+    );
+  }
 
   return {
-    recipe: decodeImageRecipe(qr.data),
+    recipe,
     token: qr.data,
     image: {
       width,
-      height,
+      height: pageHeight,
+      pages,
+      delay: metadata.delay || [100],
+      loop: metadata.loop ?? 0,
       format: metadata.format || 'unknown',
     },
   };
@@ -64,7 +77,7 @@ export async function downloadMessageImage({
   runLark,
 }) {
   const directory = await mkdtemp('.image-buddy-');
-  const output = join(directory, 'source-image.png');
+  const output = join(directory, 'source-image');
   try {
     await runLark([
       'im',

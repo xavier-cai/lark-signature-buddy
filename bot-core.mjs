@@ -49,6 +49,7 @@ export function formatRecipeReceipt(imageKeys, recipe, transportImage = null) {
     `传输图 image_key：${uniqueKeys[0]}`,
     `协议：${recipe.protocol} V${recipe.version}`,
     `原图尺寸：${source.width} × ${source.height}`,
+    `帧数：${source.frames}${source.animated ? '（动图）' : '（静态）'}`,
     `网格：${grid.cols} × ${grid.rows}（${grid.cols * grid.rows} 张）`,
     `选区：x=${crop.x}, y=${crop.y}, width=${crop.width}, height=${crop.height}`,
     `模式：${mode}`,

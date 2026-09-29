@@ -17,7 +17,9 @@
   },
   "dependencies": {
     "jsqr": "^1.4.0",
+    "modern-gif": "^2.1.0",
     "qrcode": "^1.5.4",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "upng-js": "^2.1.0"
   }
 }

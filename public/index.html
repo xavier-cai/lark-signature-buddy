@@ -15,7 +15,7 @@
           <div>
             <p class="eyebrow">IMAGE BUDDY</p>
             <h1>网格切图与图片仔</h1>
-            <p class="intro">同屏调整选区、网格和间隔预裁剪，生成带底部 QR 参数条的单张图片。</p>
+            <p class="intro">同屏调整选区、网格和间隔预裁剪；静态图输出 PNG，动图统一输出 GIF。</p>
           </div>
         </div>
         <button class="upload-button" id="upload-button" type="button">
@@ -40,7 +40,7 @@
             </span>
             <strong>拖入图片，或点击选择</strong>
             <span>也可以粘贴剪贴板图片</span>
-            <small>JPG · PNG · WEBP · GIF · BMP · ICO · TIFF · HEIC，最大 10 MB</small>
+            <small>JPG · PNG/APNG · WEBP · GIF · BMP · ICO · TIFF · HEIC，最大 10 MB</small>
           </button>
 
           <div class="canvas-stage" id="canvas-stage" hidden>
@@ -122,7 +122,7 @@
 
           <div class="notice" id="notice" role="status" aria-live="polite"></div>
           <button class="generate-button" id="generate-button" type="button" disabled>
-            <span id="generate-label">选择图片后即可生成带 QR 图片</span>
+            <span id="generate-label">选择图片后即可生成传输图片</span>
             <span class="spinner" id="spinner" hidden aria-hidden="true"></span>
           </button>
           <section class="transport-debug" id="transport-debug" hidden>
@@ -132,18 +132,18 @@
             </div>
             <img
               id="transport-preview"
-              alt="带底部 QR 参数条的传输图；自动复制失败时请右键复制图片"
+              alt="带紧凑二维码的传输图片；自动复制失败时请右键复制图片"
               title="自动复制失败时，请右键选择“复制图片”"
             />
             <p>自动复制失败时，请右键上图选择“复制图片”，再粘贴发送。</p>
-            <a id="transport-download" download="image-buddy-transport.png">下载传输 PNG 检查</a>
+            <a id="transport-download" download="image-buddy-transport">下载传输图片</a>
           </section>
         </aside>
       </section>
 
       <footer>
         <span class="status-dot"></span>
-        <span>窄图自动左右补白；复制带底部 QR 参数条的 PNG 后发送给图片仔 Bot。</span>
+        <span>二维码仅保留机器识别所需尺寸；动图保留全部帧并统一输出 GIF。</span>
       </footer>
     </main>
 

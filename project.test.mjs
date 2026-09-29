@@ -2,9 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import QRCode from 'qrcode';
+import { decode, encode } from 'modern-gif';
 import sharp from 'sharp';
+import { readFile } from 'node:fs/promises';
 
 import { decodeRecipeFromImage } from './bot-image.mjs';
+import {
+  decodeImageBytes,
+  encodeGifFrames,
+} from './public/animation-core.js';
 import {
   buildTileSpecs,
   generateAndUploadTiles,
@@ -33,8 +39,7 @@ import {
   validateStaticImageSize,
 } from './public/image-format.js';
 import {
-  QR_LABEL_HEIGHT,
-  QR_MARGIN,
+  qrSizeForModules,
   transportLayoutForSource,
 } from './public/transport-core.js';
 
@@ -153,10 +158,12 @@ test('groups image messages by chat, sender, and thread context', () => {
   );
 });
 
-const layout = transportLayoutForSource(80, 100);
+const compactQrSize = qrSizeForModules(41);
+const layout = transportLayoutForSource(80, 100, compactQrSize);
 const recipe = createImageRecipe({
   sourceWidth: 80,
   sourceHeight: 100,
+  sourceFrames: 1,
   cols: 3,
   rows: 2,
   crop: { x: 0.1, y: 0.2, width: 0.75, height: 0.6 },
@@ -171,18 +178,20 @@ const recipe = createImageRecipe({
   },
 });
 
-test('round-trips the shared V1 image recipe', () => {
+test('round-trips the shared V2 image recipe', () => {
   const token = encodeImageRecipe(recipe);
-  assert.match(token, /^IB1:[A-Za-z0-9_-]+$/);
+  assert.match(token, /^IB2:[A-Za-z0-9_-]+$/);
   assert.ok(token.length <= 64);
   assert.deepEqual(decodeImageRecipe(token), recipe);
+  assert.equal(recipe.output.format, 'png');
+  assert.equal(recipe.source.animated, false);
 });
 
 test('strictly rejects recipe version mismatches and extra fields', () => {
   const token = encodeImageRecipe(recipe);
   assert.throws(
-    () => decodeImageRecipe(token.replace('IB1:', 'IB2:')),
-    /仅支持 V1，收到 V2/,
+    () => decodeImageRecipe(token.replace('IB2:', 'IB3:')),
+    /仅支持 V2，收到 V3/,
   );
   const replacement = token.endsWith('A') ? 'B' : 'A';
   assert.throws(
@@ -192,6 +201,14 @@ test('strictly rejects recipe version mismatches and extra fields', () => {
   assert.throws(
     () => encodeImageRecipe({ ...recipe, unexpected: true }),
     /payload 字段必须为/,
+  );
+  assert.throws(
+    () =>
+      encodeImageRecipe({
+        ...recipe,
+        source: { ...recipe.source, animated: true },
+      }),
+    /animated 与 source.frames 不一致/,
   );
 });
 
@@ -226,13 +243,13 @@ test('formats generated image keys and magic links in row-major order', () => {
 test('pads a narrow image and decodes its QR recipe end to end', async () => {
   assert.deepEqual(layout, {
     canvasWidth: 384,
-    canvasHeight: 436,
+    canvasHeight: 149,
     sourceX: 152,
     sourceY: 0,
     sourceWidth: 80,
     sourceHeight: 100,
-    footerHeight: 336,
-    qrSize: 256,
+    footerHeight: 49,
+    qrSize: 49,
   });
 
   const qr = await QRCode.toBuffer(encodeImageRecipe(recipe), {
@@ -264,7 +281,7 @@ test('pads a narrow image and decodes its QR recipe end to end', async () => {
       {
         input: qr,
         left: Math.round((layout.canvasWidth - layout.qrSize) / 2),
-        top: layout.sourceHeight + QR_MARGIN + QR_LABEL_HEIGHT,
+        top: layout.sourceHeight,
       },
     ])
     .png()
@@ -273,9 +290,15 @@ test('pads a narrow image and decodes its QR recipe end to end', async () => {
   assert.deepEqual(decoded.recipe, recipe);
   assert.deepEqual(decoded.image, {
     width: 384,
-    height: 436,
+    height: 149,
+    pages: 1,
+    delay: [100],
+    loop: 0,
     format: 'png',
   });
+  const transcoded = await sharp(transport).jpeg({ quality: 65 }).toBuffer();
+  const decodedAfterJpeg = await decodeRecipeFromImage(transcoded);
+  assert.deepEqual(decodedAfterJpeg.recipe, recipe);
 
   const specs = buildTileSpecs(decoded.recipe, decoded.image);
   assert.equal(specs.length, 6);
@@ -341,9 +364,165 @@ test('uploads rendered tiles concurrently while preserving result order', async 
   assert.equal(calls.length, 6);
 });
 
-test('rejects transport canvases beyond the V1 resource limits', () => {
-  assert.throws(() => transportLayoutForSource(8192, 8192), /32 MP/);
-  assert.throws(() => transportLayoutForSource(9000, 10), /8192 px/);
+test('preserves animation frames, delays, and loop in generated GIF tiles', async () => {
+  const animatedLayout = transportLayoutForSource(80, 100, compactQrSize);
+  const animatedRecipe = createImageRecipe({
+    sourceWidth: 80,
+    sourceHeight: 100,
+    sourceFrames: 2,
+    cols: 2,
+    rows: 2,
+    crop: { x: 0.05, y: 0.05, width: 0.9, height: 0.9 },
+    mode: 'plain',
+    gapRatio: 0.58,
+    outputSize: 512,
+    contentRect: {
+      x: animatedLayout.sourceX / animatedLayout.canvasWidth,
+      y: animatedLayout.sourceY / animatedLayout.canvasHeight,
+      width: animatedLayout.sourceWidth / animatedLayout.canvasWidth,
+      height: animatedLayout.sourceHeight / animatedLayout.canvasHeight,
+    },
+  });
+  assert.equal(animatedRecipe.output.format, 'gif');
+  assert.equal(animatedRecipe.source.animated, true);
+  const qr = await QRCode.toBuffer(encodeImageRecipe(animatedRecipe), {
+    type: 'png',
+    width: animatedLayout.qrSize,
+    margin: 4,
+    errorCorrectionLevel: 'H',
+  });
+  const pageBuffers = [];
+  for (const background of ['#ff0000', '#0000ff']) {
+    const source = await sharp({
+      create: {
+        width: 80,
+        height: 100,
+        channels: 4,
+        background,
+      },
+    })
+      .png()
+      .toBuffer();
+    pageBuffers.push(
+      await sharp({
+        create: {
+          width: animatedLayout.canvasWidth,
+          height: animatedLayout.canvasHeight,
+          channels: 4,
+          background: '#ffffff',
+        },
+      })
+        .composite([
+          {
+            input: source,
+            left: animatedLayout.sourceX,
+            top: animatedLayout.sourceY,
+          },
+          {
+            input: qr,
+            left: Math.round(
+              (animatedLayout.canvasWidth - animatedLayout.qrSize) / 2,
+            ),
+            top: animatedLayout.sourceHeight,
+          },
+        ])
+        .raw()
+        .toBuffer(),
+    );
+  }
+  const transport = await sharp(Buffer.concat(pageBuffers), {
+    raw: {
+      width: animatedLayout.canvasWidth,
+      height: animatedLayout.canvasHeight * 2,
+      channels: 4,
+      pageHeight: animatedLayout.canvasHeight,
+    },
+  })
+    .gif({
+      loop: 0,
+      delay: [100, 200],
+      keepDuplicateFrames: true,
+    })
+    .toBuffer();
+  const decoded = await decodeRecipeFromImage(transport);
+  assert.deepEqual(decoded.recipe, animatedRecipe);
+  assert.equal(decoded.image.pages, 2);
+  assert.deepEqual(decoded.image.delay, [100, 200]);
+  assert.equal(decoded.image.loop, 0);
+
+  const tile = await renderTile(
+    transport,
+    buildTileSpecs(decoded.recipe, decoded.image)[0],
+    decoded.image,
+  );
+  const metadata = await sharp(tile, { animated: true }).metadata();
+  assert.equal(metadata.format, 'gif');
+  assert.equal(metadata.pages, 2);
+  assert.equal(metadata.pageHeight, 512);
+  assert.deepEqual(metadata.delay, [100, 200]);
+  assert.equal(metadata.loop, 0);
+});
+
+test('browser GIF codec preserves frame count, delays, and loop', async () => {
+  const width = 3;
+  const height = 2;
+  const red = new Uint8ClampedArray(width * height * 4);
+  const blue = new Uint8ClampedArray(width * height * 4);
+  for (let index = 0; index < red.length; index += 4) {
+    red[index] = 255;
+    red[index + 3] = 255;
+    blue[index + 2] = 255;
+    blue[index + 3] = 255;
+  }
+  const blob = await encodeGifFrames({
+    width,
+    height,
+    frames: [
+      { data: red, delay: 80 },
+      { data: blue, delay: 160 },
+    ],
+    loop: 0,
+  });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const decoded = await decodeImageBytes(bytes, 'image/gif');
+  assert.equal(decoded.frames.length, 2);
+  assert.deepEqual(
+    decoded.frames.map((frame) => frame.delay),
+    [80, 160],
+  );
+  assert.equal(decoded.loop, 0);
+  assert.equal(decode(bytes).frames.length, 2);
+});
+
+test('browser APNG decoder preserves all frames and delays', async () => {
+  const bytes = await readFile('./test-fixtures/animated-apng.png');
+  const decoded = await decodeImageBytes(bytes, 'image/apng');
+  assert.equal(decoded.width, 16);
+  assert.equal(decoded.height, 12);
+  assert.equal(decoded.frames.length, 2);
+  assert.deepEqual(
+    decoded.frames.map((frame) => frame.delay),
+    [80, 160],
+  );
+  assert.equal(decoded.loop, 0);
+});
+
+test('browser APNG frames can be normalized into a multi-frame GIF', async () => {
+  const bytes = await readFile('./test-fixtures/animated-apng.png');
+  const decoded = await decodeImageBytes(bytes, 'image/apng');
+  const blob = await encodeGifFrames(decoded);
+  const gif = decode(new Uint8Array(await blob.arrayBuffer()));
+  assert.equal(gif.frames.length, 2);
+  assert.deepEqual(
+    gif.frames.map((frame) => frame.delay),
+    [80, 160],
+  );
+  assert.equal(gif.loopCount, 0);
+});
+
+test('rejects transport canvases beyond the V2 resource limits', () => {
+  assert.throws(() => transportLayoutForSource(8192, 8192, 147), /32 MP/);
+  assert.throws(() => transportLayoutForSource(9000, 10, 147), /8192 px/);
   assert.throws(() => validateStaticImageSize(8192, 8192), /32 MP/);
   assert.throws(() => validateStaticImageSize(9000, 10), /8192 px/);
 });

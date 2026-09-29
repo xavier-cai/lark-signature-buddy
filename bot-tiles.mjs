@@ -7,6 +7,7 @@ import { tileRects } from './public/grid-core.js';
 
 const MAX_TILES = 225;
 const DEFAULT_CONCURRENCY = 4;
+const MAX_FRAME_TILE_WORK = 3600;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -67,6 +68,11 @@ export function buildTileSpecs(recipe, transportImage) {
   if (normalizedTiles.length > MAX_TILES) {
     throw new Error(`切片数超过 ${MAX_TILES} 张上限`);
   }
+  if (normalizedTiles.length * recipe.source.frames > MAX_FRAME_TILE_WORK) {
+    throw new Error(
+      `动图处理量过大：${normalizedTiles.length} 张 × ${recipe.source.frames} 帧，超过 ${MAX_FRAME_TILE_WORK} 上限`,
+    );
+  }
 
   return normalizedTiles.map((tile, index) => {
     const relative = toPixelRect(tile, source.width, source.height);
@@ -84,9 +90,13 @@ export function buildTileSpecs(recipe, transportImage) {
   });
 }
 
-export async function renderTile(input, spec) {
-  return sharp(input, {
-    animated: false,
+export async function renderTile(input, spec, animation = {}) {
+  const pages = animation.pages || 1;
+  const delays = animation.delay?.length
+    ? animation.delay
+    : Array.from({ length: pages }, () => 100);
+  const pipeline = sharp(input, {
+    animated: true,
     failOn: 'warning',
   })
     .extract({
@@ -98,9 +108,19 @@ export async function renderTile(input, spec) {
     .resize(spec.outputWidth, spec.outputHeight, {
       fit: 'fill',
       kernel: sharp.kernel.lanczos3,
+    });
+  if (animation.pages > 1) {
+    return pipeline.gif({
+      loop: animation.loop ?? 0,
+      delay: delays,
+      colours: 256,
+      effort: 4,
+      dither: 1,
+      keepDuplicateFrames: true,
     })
-    .png()
-    .toBuffer();
+      .toBuffer();
+  }
+  return pipeline.png().toBuffer();
 }
 
 function imageKeyFromResponse(response) {
@@ -135,12 +155,18 @@ export async function generateAndUploadTiles({
       cursor += 1;
       if (current >= specs.length) return;
       const spec = specs[current];
+      const extension = transportImage.pages > 1 ? 'gif' : 'png';
       const path = join(
         directory,
-        `tile-${String(current + 1).padStart(3, '0')}.png`,
+        `tile-${String(current + 1).padStart(3, '0')}.${extension}`,
       );
       try {
-        const buffer = await renderTile(input, spec);
+        const buffer = await renderTile(input, spec, transportImage);
+        if (buffer.length > 10 * 1024 * 1024) {
+          throw new Error(
+            `第 ${current + 1} 张 ${extension.toUpperCase()} 超过飞书 10 MB 上传上限`,
+          );
+        }
         await writeFile(path, buffer, { mode: 0o600 });
         const response = await runLark([
           'im',
