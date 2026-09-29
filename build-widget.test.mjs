@@ -29,5 +29,6 @@ test('build embeds bundle replacement tokens literally', async () => {
   assert.match(output, /id="color-mapping"/);
   assert.match(output, /preview-comparison/);
   assert.match(output, /mappedFrameData/);
+  assert.match(output, /右键复制会丢失动画帧/);
   assert.doesNotMatch(output, /src="\.\/app\.js"/);
 });

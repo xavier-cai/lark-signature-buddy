@@ -88,7 +88,7 @@ function updateCopyLabel() {
   }
   const mappingLabel = state.colorMapping ? '色彩映射' : '原始色彩';
   generateLabel.textContent = state.animation?.frames.length > 1
-    ? `生成并复制 GIF 动图（${mappingLabel}输出）`
+    ? `生成并下载 GIF 动图（${mappingLabel}输出）`
     : `生成并复制 ${mappingLabel} PNG 图片`;
 }
 
@@ -775,6 +775,14 @@ async function copyImageRecipe() {
     transportDetail.textContent =
       `${layout.canvasWidth} × ${layout.canvasHeight} · ${state.animation.frames.length} 帧 · ${state.colorMapping ? '色彩映射' : '原始色彩'} · ${recipeToken.length} 字符`;
     transportDebug.hidden = false;
+    if (animated) {
+      transportDownload.click();
+      setNotice(
+        'GIF 中间图已下载；请将下载的 .gif 文件作为图片上传给图片仔。不要右键复制，浏览器会转成单帧 JPEG。',
+        'success',
+      );
+      return;
+    }
     const clipboardPromise = startAsyncCopyImage(blob);
     const nativeCopied = clipboardPromise ? await clipboardPromise : false;
     if (!nativeCopied) {
@@ -816,6 +824,13 @@ emptyStage.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => chooseFile(fileInput.files?.[0]));
 resetGridButton.addEventListener('click', resetCrop);
 generateButton.addEventListener('click', copyImageRecipe);
+transportPreview.addEventListener('contextmenu', (event) => {
+  if (!isAnimated()) return;
+  event.preventDefault();
+  setNotice(
+    '请使用下方“下载传输图片”，再将 .gif 文件作为图片上传；右键复制会转成单帧图片。',
+  );
+});
 colorMappingInput.addEventListener('change', () => {
   state.colorMapping = colorMappingInput.checked;
   colorMappingInput

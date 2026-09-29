@@ -79,7 +79,9 @@ export async function decodeRecipeFromImage(input) {
   if (!qr?.data) throw new Error('未识别到 Image Buddy QR 参数');
   const recipe = decodeImageRecipe(qr.data);
   if (recipe.source.animated && kind.format !== 'gif') {
-    throw new Error('V4 动图传输格式必须是 GIF');
+    throw new Error(
+      '动图传输图已被复制链路转成静态图片；请从页面下载 GIF 文件后作为图片上传，不要右键复制',
+    );
   }
   if (recipe.source.frames !== pages) {
     throw new Error(
