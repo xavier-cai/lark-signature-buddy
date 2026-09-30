@@ -15,7 +15,7 @@ export function validateStaticImageSize(width, height) {
     height > MAX_IMAGE_EDGE ||
     width * height > MAX_IMAGE_PIXELS
   ) {
-    throw new Error('图片尺寸过大，当前 V4 上限为 8192 px / 32 MP');
+    throw new Error('图片尺寸过大，当前上限为 8192 px / 32 MP');
   }
 }
 
@@ -43,17 +43,22 @@ export function detectImageKind(bytes) {
     return { format: 'png', animated: false };
   }
   if (ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP') {
+    const view = new DataView(
+      bytes.buffer,
+      bytes.byteOffset,
+      bytes.byteLength,
+    );
     for (let index = 12; index + 8 <= bytes.length; ) {
       const chunk = ascii(index, 4);
-      const length =
-        bytes[index + 4] |
-        (bytes[index + 5] << 8) |
-        (bytes[index + 6] << 16) |
-        (bytes[index + 7] << 24);
+      const length = view.getUint32(index + 4, true);
+      const nextIndex = index + 8 + length + (length % 2);
+      if (nextIndex <= index || nextIndex > bytes.length) {
+        return { format: 'webp', animated: false };
+      }
       if (chunk === 'ANIM' || chunk === 'ANMF') {
         return { format: 'webp', animated: true };
       }
-      index += 8 + length + (length % 2);
+      index = nextIndex;
     }
     return { format: 'webp', animated: false };
   }

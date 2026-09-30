@@ -1,0 +1,20 @@
+{
+  "name": "@lark-signature-buddy/core",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./animation": "./src/animation.js",
+    "./color-mapping": "./src/color-mapping.js",
+    "./grid": "./src/grid.js",
+    "./image-format": "./src/image-format.js",
+    "./recipe": "./src/recipe.js",
+    "./tiles": "./src/tiles.js",
+    "./transport": "./src/transport.js"
+  },
+  "dependencies": {
+    "modern-gif": "2.1.0",
+    "upng-js": "2.1.0"
+  }
+}

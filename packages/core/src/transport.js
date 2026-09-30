@@ -35,7 +35,7 @@ export function transportLayoutForSource(sourceWidth, sourceHeight, qrSize) {
     canvasHeight > MAX_TRANSPORT_EDGE ||
     canvasWidth * canvasHeight > MAX_TRANSPORT_PIXELS
   ) {
-    throw new Error('图片尺寸过大，当前 V4 传输画布上限为 8192 px / 32 MP');
+    throw new Error('图片尺寸过大，传输画布上限为 8192 px / 32 MP');
   }
   return {
     canvasWidth,

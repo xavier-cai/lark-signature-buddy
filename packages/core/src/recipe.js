@@ -1,8 +1,8 @@
-export const IMAGE_RECIPE_NAME = 'image-buddy-recipe';
-export const IMAGE_RECIPE_VERSION = 4;
-export const IMAGE_RECIPE_PREFIX = `IB${IMAGE_RECIPE_VERSION}:`;
-export const IMAGE_RECIPE_BYTE_LENGTH = 41;
-export const IMAGE_RECIPE_TOKEN_MAX_LENGTH = 64;
+export const SIGNATURE_RECIPE_NAME = 'lark-signature-buddy';
+export const SIGNATURE_RECIPE_VERSION = 1;
+export const SIGNATURE_RECIPE_PREFIX = `LSB${SIGNATURE_RECIPE_VERSION}:`;
+export const SIGNATURE_RECIPE_BYTE_LENGTH = 41;
+export const SIGNATURE_RECIPE_TOKEN_MAX_LENGTH = 64;
 
 const MODE_TO_CODE = new Map([
   ['plain', 0],
@@ -104,7 +104,7 @@ export function crc32(bytes) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-export function validateImageRecipe(value) {
+export function validateSignatureRecipe(value) {
   assertExactKeys(
     value,
     [
@@ -121,9 +121,11 @@ export function validateImageRecipe(value) {
     ],
     'payload',
   );
-  if (value.protocol !== IMAGE_RECIPE_NAME) fail(`protocol 必须是 ${IMAGE_RECIPE_NAME}`);
-  if (value.version !== IMAGE_RECIPE_VERSION) {
-    fail(`仅支持 V${IMAGE_RECIPE_VERSION}，收到 V${String(value.version)}`);
+  if (value.protocol !== SIGNATURE_RECIPE_NAME) {
+    fail(`protocol 必须是 ${SIGNATURE_RECIPE_NAME}`);
+  }
+  if (value.version !== SIGNATURE_RECIPE_VERSION) {
+    fail(`仅支持 V${SIGNATURE_RECIPE_VERSION}，收到 V${String(value.version)}`);
   }
 
   assertExactKeys(value.source, ['width', 'height', 'animated', 'frames'], 'source');
@@ -151,7 +153,7 @@ export function validateImageRecipe(value) {
   assertExactKeys(value.output, ['width', 'height', 'format'], 'output');
   assertInteger(value.output.width, 1, 4096, 'output.width');
   assertInteger(value.output.height, 1, 4096, 'output.height');
-  if (value.output.width !== value.output.height) fail('V4 仅支持正方形输出');
+  if (value.output.width !== value.output.height) fail('仅支持正方形输出');
   if (!FORMAT_TO_CODE.has(value.output.format)) {
     fail('output.format 必须是 png 或 apng');
   }
@@ -163,7 +165,7 @@ export function validateImageRecipe(value) {
   return value;
 }
 
-export function createImageRecipe({
+export function createSignatureRecipe({
   sourceWidth,
   sourceHeight,
   sourceFrames,
@@ -176,9 +178,9 @@ export function createImageRecipe({
   outputSize,
   contentRect,
 }) {
-  return validateImageRecipe({
-    protocol: IMAGE_RECIPE_NAME,
-    version: IMAGE_RECIPE_VERSION,
+  return validateSignatureRecipe({
+    protocol: SIGNATURE_RECIPE_NAME,
+    version: SIGNATURE_RECIPE_VERSION,
     source: {
       width: sourceWidth,
       height: sourceHeight,
@@ -211,13 +213,13 @@ export function createImageRecipe({
   });
 }
 
-export function encodeImageRecipe(recipe) {
-  const value = validateImageRecipe(recipe);
-  const bytes = new Uint8Array(IMAGE_RECIPE_BYTE_LENGTH);
+export function encodeSignatureRecipe(recipe) {
+  const value = validateSignatureRecipe(recipe);
+  const bytes = new Uint8Array(SIGNATURE_RECIPE_BYTE_LENGTH);
   const view = new DataView(bytes.buffer);
-  bytes[0] = 0x49;
-  bytes[1] = 0x42;
-  bytes[2] = IMAGE_RECIPE_VERSION;
+  bytes[0] = 0x4c;
+  bytes[1] = 0x53;
+  bytes[2] = SIGNATURE_RECIPE_VERSION;
   bytes[3] =
     MODE_TO_CODE.get(value.mode) |
     (value.colorMapping ? 0x40 : 0) |
@@ -244,24 +246,24 @@ export function encodeImageRecipe(recipe) {
   bytes[34] = FORMAT_TO_CODE.get(value.output.format);
   view.setUint16(35, value.source.frames);
   view.setUint32(37, crc32(bytes.subarray(0, 37)));
-  const token = `${IMAGE_RECIPE_PREFIX}${encodeBase64Url(bytes)}`;
-  if (token.length > IMAGE_RECIPE_TOKEN_MAX_LENGTH) fail('编码超过长度上限');
+  const token = `${SIGNATURE_RECIPE_PREFIX}${encodeBase64Url(bytes)}`;
+  if (token.length > SIGNATURE_RECIPE_TOKEN_MAX_LENGTH) fail('编码超过长度上限');
   return token;
 }
 
-export function decodeImageRecipe(token) {
-  const match = /^IB(\d+):([A-Za-z0-9_-]+)$/.exec(token);
+export function decodeSignatureRecipe(token) {
+  const match = /^LSB(\d+):([A-Za-z0-9_-]+)$/.exec(token);
   if (!match) fail('缺少完整协议标记');
   const markerVersion = Number(match[1]);
-  if (markerVersion !== IMAGE_RECIPE_VERSION) {
-    fail(`仅支持 V${IMAGE_RECIPE_VERSION}，收到 V${markerVersion}`);
+  if (markerVersion !== SIGNATURE_RECIPE_VERSION) {
+    fail(`仅支持 V${SIGNATURE_RECIPE_VERSION}，收到 V${markerVersion}`);
   }
   const bytes = decodeBase64Url(match[2]);
-  if (bytes.length !== IMAGE_RECIPE_BYTE_LENGTH) {
-    fail(`payload 长度应为 ${IMAGE_RECIPE_BYTE_LENGTH} bytes`);
+  if (bytes.length !== SIGNATURE_RECIPE_BYTE_LENGTH) {
+    fail(`payload 长度应为 ${SIGNATURE_RECIPE_BYTE_LENGTH} bytes`);
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (bytes[0] !== 0x49 || bytes[1] !== 0x42) fail('magic 不匹配');
+  if (bytes[0] !== 0x4c || bytes[1] !== 0x53) fail('magic 不匹配');
   if (bytes[2] !== markerVersion) fail('协议标记与 payload 版本不一致');
   if (view.getUint32(37) !== crc32(bytes.subarray(0, 37))) fail('CRC32 校验失败');
   const modeCode = bytes[3] & 0x3f;
@@ -273,8 +275,8 @@ export function decodeImageRecipe(token) {
   const normalized = Array.from({ length: 9 }, (_, index) =>
     uint16ToNormalized(view.getUint16(14 + index * 2)),
   );
-  return validateImageRecipe({
-    protocol: IMAGE_RECIPE_NAME,
+  return validateSignatureRecipe({
+    protocol: SIGNATURE_RECIPE_NAME,
     version: bytes[2],
     source: {
       width: view.getUint32(4),

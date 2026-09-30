@@ -4,49 +4,52 @@ import test from 'node:test';
 import QRCode from 'qrcode';
 import sharp from 'sharp';
 import { readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { relative } from 'node:path';
 
 import {
   decodeRecipeFromImage,
   downloadMessageImage,
-} from './bot-image.mjs';
+} from '../apps/bot/src/image.js';
 import {
   decodeImageBytes,
-  encodeApngBytes,
   encodeApngFrames,
   encodeGifFrames,
-} from './public/animation-core.js';
-import { mapToLuminanceAlpha } from './public/color-mapping.js';
+} from '@lark-signature-buddy/core/animation';
+import { mapToLuminanceAlpha } from '@lark-signature-buddy/core/color-mapping';
 import {
-  buildTileSpecs,
   generateAndUploadTiles,
   renderTile,
-} from './bot-tiles.mjs';
+} from '../apps/bot/src/tiles.js';
+import { buildTileSpecs } from '@lark-signature-buddy/core/tiles';
 import {
   eventBatchKey,
   extractImageKeys,
   formatGeneratedReply,
   formatRecipeReceipt,
-} from './bot-core.mjs';
+} from '../apps/bot/src/messages.js';
+import { SerialQueue } from '../apps/bot/src/serial-queue.js';
 import {
-  createImageRecipe,
-  decodeImageRecipe,
-  encodeImageRecipe,
-} from './public/image-recipe.js';
+  createSignatureRecipe,
+  decodeSignatureRecipe,
+  encodeSignatureRecipe,
+} from '@lark-signature-buddy/core/recipe';
 import {
   compositionUnits,
   fitCrop,
   parseGrid,
   selectionAspect,
   tileRects,
-} from './public/grid-core.js';
+} from '@lark-signature-buddy/core/grid';
 import {
+  detectImageKind,
   isAnimatedImageBytes,
   validateStaticImageSize,
-} from './public/image-format.js';
+} from '@lark-signature-buddy/core/image-format';
 import {
   qrSizeForModules,
   transportLayoutForSource,
-} from './public/transport-core.js';
+} from '@lark-signature-buddy/core/transport';
 
 test('parses supported grids', () => {
   assert.deepEqual(parseGrid('2x3'), { cols: 2, rows: 3 });
@@ -200,7 +203,8 @@ test('downloads message images to an explicit extension path', async () => {
     profile: 'test-profile',
     runLark: async (args) => {
       output = args[args.indexOf('--output') + 1];
-      assert.match(output, /\.image-buddy-[^/]+\/source-image\.png$/);
+      assert.equal(relative(tmpdir(), output).startsWith('..'), false);
+      assert.match(output, /lark-signature-buddy-download-[^/]+\/source-image\.png$/);
       await writeFile(output, expected);
       return { data: { saved_path: output } };
     },
@@ -208,9 +212,64 @@ test('downloads message images to an explicit extension path', async () => {
   assert.deepEqual(actual, expected);
 });
 
-const compactQrSize = qrSizeForModules(41);
+test('serial queue preserves per-context order without blocking other contexts', async () => {
+  const queue = new SerialQueue();
+  const order = [];
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+
+  const first = queue.run('same-context', async () => {
+    order.push('first:start');
+    await firstGate;
+    order.push('first:end');
+  });
+  const second = queue.run('same-context', async () => {
+    order.push('second');
+  });
+  const independent = queue.run('other-context', async () => {
+    order.push('other');
+  });
+
+  await independent;
+  assert.deepEqual(order, ['first:start', 'other']);
+  releaseFirst();
+  await Promise.all([first, second]);
+  await queue.drain();
+  assert.deepEqual(order, ['first:start', 'other', 'first:end', 'second']);
+});
+
+const bootstrapLayout = transportLayoutForSource(
+  80,
+  100,
+  qrSizeForModules(41),
+);
+const bootstrapRecipe = createSignatureRecipe({
+  sourceWidth: 80,
+  sourceHeight: 100,
+  sourceFrames: 1,
+  cols: 3,
+  rows: 2,
+  crop: { x: 0.1, y: 0.2, width: 0.75, height: 0.6 },
+  mode: 'precut',
+  gapRatio: 0.58,
+  colorMapping: true,
+  outputSize: 512,
+  contentRect: {
+    x: bootstrapLayout.sourceX / bootstrapLayout.canvasWidth,
+    y: bootstrapLayout.sourceY / bootstrapLayout.canvasHeight,
+    width: bootstrapLayout.sourceWidth / bootstrapLayout.canvasWidth,
+    height: bootstrapLayout.sourceHeight / bootstrapLayout.canvasHeight,
+  },
+});
+const compactQrSize = qrSizeForModules(
+  QRCode.create(encodeSignatureRecipe(bootstrapRecipe), {
+    errorCorrectionLevel: 'H',
+  }).modules.size,
+);
 const layout = transportLayoutForSource(80, 100, compactQrSize);
-const recipe = createImageRecipe({
+const recipe = createSignatureRecipe({
   sourceWidth: 80,
   sourceHeight: 100,
   sourceFrames: 1,
@@ -229,42 +288,68 @@ const recipe = createImageRecipe({
   },
 });
 
-test('round-trips the shared V4 image recipe', () => {
-  const token = encodeImageRecipe(recipe);
-  assert.match(token, /^IB4:[A-Za-z0-9_-]+$/);
+test('round-trips the shared LSB1 signature recipe', () => {
+  const token = encodeSignatureRecipe(recipe);
+  assert.match(token, /^LSB1:[A-Za-z0-9_-]+$/);
   assert.ok(token.length <= 64);
-  assert.deepEqual(decodeImageRecipe(token), recipe);
+  assert.deepEqual(decodeSignatureRecipe(token), recipe);
   assert.equal(recipe.output.format, 'png');
   assert.equal(recipe.source.animated, false);
   assert.equal(recipe.colorMapping, true);
 });
 
 test('strictly rejects recipe version mismatches and extra fields', () => {
-  const token = encodeImageRecipe(recipe);
+  const token = encodeSignatureRecipe(recipe);
   assert.throws(
-    () => decodeImageRecipe(token.replace('IB4:', 'IB3:')),
-    /仅支持 V4，收到 V3/,
+    () => decodeSignatureRecipe(token.replace('LSB1:', 'IB4:')),
+    /缺少完整协议标记/,
+  );
+  assert.throws(
+    () => decodeSignatureRecipe(token.replace('LSB1:', 'LSB2:')),
+    /仅支持 V1，收到 V2/,
   );
   const mutationIndex = 12;
   const replacement = token[mutationIndex] === 'A' ? 'B' : 'A';
   assert.throws(
     () =>
-      decodeImageRecipe(
+      decodeSignatureRecipe(
         `${token.slice(0, mutationIndex)}${replacement}${token.slice(mutationIndex + 1)}`,
       ),
     /CRC32 校验失败/,
   );
   assert.throws(
-    () => encodeImageRecipe({ ...recipe, unexpected: true }),
+    () => encodeSignatureRecipe({ ...recipe, unexpected: true }),
     /payload 字段必须为/,
   );
   assert.throws(
     () =>
-      encodeImageRecipe({
+      encodeSignatureRecipe({
         ...recipe,
         source: { ...recipe.source, animated: true },
       }),
     /animated 与 source.frames 不一致/,
+  );
+});
+
+test('shared tile planner enforces bounds and animation workload', () => {
+  assert.throws(
+    () => buildTileSpecs(recipe, { width: 0, height: 149 }),
+    /传输图片尺寸无效/,
+  );
+  assert.throws(
+    () => buildTileSpecs(
+      {
+        ...recipe,
+        source: {
+          ...recipe.source,
+          animated: true,
+          frames: 120,
+        },
+        grid: { cols: 15, rows: 15 },
+      },
+      { width: layout.canvasWidth, height: layout.canvasHeight },
+    ),
+    /动图处理量过大/,
   );
 });
 
@@ -308,7 +393,7 @@ test('pads a narrow image and decodes its QR recipe end to end', async () => {
     qrSize: 49,
   });
 
-  const qr = await QRCode.toBuffer(encodeImageRecipe(recipe), {
+  const qr = await QRCode.toBuffer(encodeSignatureRecipe(recipe), {
     type: 'png',
     width: layout.qrSize,
     margin: 4,
@@ -421,8 +506,31 @@ test('uploads rendered tiles concurrently while preserving result order', async 
 });
 
 test('preserves animation frames, delays, loop, and alpha in APNG tiles', async () => {
-  const animatedLayout = transportLayoutForSource(80, 100, compactQrSize);
-  const animatedRecipe = createImageRecipe({
+  const animatedBootstrapRecipe = createSignatureRecipe({
+    sourceWidth: 80,
+    sourceHeight: 100,
+    sourceFrames: 2,
+    cols: 2,
+    rows: 2,
+    crop: { x: 0.05, y: 0.05, width: 0.9, height: 0.9 },
+    mode: 'plain',
+    gapRatio: 0.58,
+    colorMapping: true,
+    outputSize: 512,
+    contentRect: {
+      x: bootstrapLayout.sourceX / bootstrapLayout.canvasWidth,
+      y: bootstrapLayout.sourceY / bootstrapLayout.canvasHeight,
+      width: bootstrapLayout.sourceWidth / bootstrapLayout.canvasWidth,
+      height: bootstrapLayout.sourceHeight / bootstrapLayout.canvasHeight,
+    },
+  });
+  const animatedQrSize = qrSizeForModules(
+    QRCode.create(encodeSignatureRecipe(animatedBootstrapRecipe), {
+      errorCorrectionLevel: 'H',
+    }).modules.size,
+  );
+  const animatedLayout = transportLayoutForSource(80, 100, animatedQrSize);
+  const animatedRecipe = createSignatureRecipe({
     sourceWidth: 80,
     sourceHeight: 100,
     sourceFrames: 2,
@@ -442,7 +550,7 @@ test('preserves animation frames, delays, loop, and alpha in APNG tiles', async 
   });
   assert.equal(animatedRecipe.output.format, 'apng');
   assert.equal(animatedRecipe.source.animated, true);
-  const qr = await QRCode.toBuffer(encodeImageRecipe(animatedRecipe), {
+  const qr = await QRCode.toBuffer(encodeSignatureRecipe(animatedRecipe), {
     type: 'png',
     width: animatedLayout.qrSize,
     margin: 4,
@@ -554,7 +662,7 @@ test('browser APNG codec preserves RGBA, frame count, delays, and loop', async (
 });
 
 test('browser APNG decoder preserves all frames and delays', async () => {
-  const bytes = await readFile('./test-fixtures/animated-apng.png');
+  const bytes = await readFile('./tests/fixtures/animated-apng.png');
   const decoded = await decodeImageBytes(bytes, 'image/apng');
   assert.equal(decoded.width, 16);
   assert.equal(decoded.height, 12);
@@ -567,7 +675,7 @@ test('browser APNG decoder preserves all frames and delays', async () => {
 });
 
 test('browser APNG frames can be normalized into a multi-frame APNG', async () => {
-  const bytes = await readFile('./test-fixtures/animated-apng.png');
+  const bytes = await readFile('./tests/fixtures/animated-apng.png');
   const decoded = await decodeImageBytes(bytes, 'image/apng');
   const blob = await encodeApngFrames(decoded);
   const apng = await decodeImageBytes(
@@ -582,7 +690,7 @@ test('browser APNG frames can be normalized into a multi-frame APNG', async () =
   assert.equal(apng.loop, 0);
 });
 
-test('rejects transport canvases beyond the V4 resource limits', () => {
+test('rejects transport canvases beyond the resource limits', () => {
   assert.throws(() => transportLayoutForSource(8192, 8192, 147), /32 MP/);
   assert.throws(() => transportLayoutForSource(9000, 10, 147), /8192 px/);
   assert.throws(() => validateStaticImageSize(8192, 8192), /32 MP/);
@@ -608,4 +716,16 @@ test('detects GIF, APNG, and animated WebP signatures', () => {
     isAnimatedImageBytes(new TextEncoder().encode('RIFF0000WEBPVP8 ')),
     false,
   );
+});
+
+test('rejects malformed WebP chunk lengths without looping', () => {
+  const malformed = new Uint8Array(20);
+  malformed.set(new TextEncoder().encode('RIFF'), 0);
+  malformed.set(new TextEncoder().encode('WEBP'), 8);
+  malformed.set(new TextEncoder().encode('JUNK'), 12);
+  malformed.set([0xf8, 0xff, 0xff, 0xff], 16);
+  assert.deepEqual(detectImageKind(malformed), {
+    format: 'webp',
+    animated: false,
+  });
 });
