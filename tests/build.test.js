@@ -7,13 +7,13 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
-const root = dirname(fileURLToPath(import.meta.url));
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
-test('build embeds bundle replacement tokens literally', async () => {
-  await execFileAsync(process.execPath, ['build-widget.mjs'], { cwd: root });
+test('build creates a self-contained static application', async () => {
+  await execFileAsync(process.execPath, ['scripts/build.mjs'], { cwd: root });
 
   const output = await readFile(
-    join(root, 'dist', 'image-buddy-widget.html'),
+    join(root, 'dist', 'index.html'),
     'utf8',
   );
 
@@ -23,6 +23,8 @@ test('build embeds bundle replacement tokens literally', async () => {
   );
   assert.equal(output.match(/<script type="module">/g)?.length, 1);
   assert.equal(output.match(/<\/script>/g)?.length, 1);
+  assert.equal(output.match(/<style>/g)?.length, 1);
+  assert.doesNotMatch(output, /href="\.\/styles\.css"/);
   assert.match(output, /id="frame-picker"/);
   assert.match(output, /id="animation-badge"/);
   assert.match(output, /选择裁剪参考帧/);

@@ -5,7 +5,7 @@ import {
   detectImageKind,
   validateStaticImageSize,
 } from './image-format.js';
-import { validateAnimationWork } from './transport-core.js';
+import { validateAnimationWork } from './transport.js';
 
 function clampDelay(value) {
   return Math.max(20, Math.min(65535, Math.round(value || 100)));

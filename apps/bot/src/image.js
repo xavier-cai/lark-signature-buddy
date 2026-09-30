@@ -1,12 +1,13 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import jsQR from 'jsqr';
 import sharp from 'sharp';
 
-import { decodeImageBytes } from './public/animation-core.js';
-import { detectImageKind } from './public/image-format.js';
-import { decodeImageRecipe } from './public/image-recipe.js';
+import { decodeImageBytes } from '@lark-signature-buddy/core/animation';
+import { detectImageKind } from '@lark-signature-buddy/core/image-format';
+import { decodeSignatureRecipe } from '@lark-signature-buddy/core/recipe';
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_IMAGE_PIXELS = 80 * 1024 * 1024;
@@ -76,8 +77,8 @@ export async function decodeRecipeFromImage(input) {
   const qr = jsQR(pixels, info.width, info.height, {
     inversionAttempts: 'dontInvert',
   });
-  if (!qr?.data) throw new Error('未识别到 Image Buddy QR 参数');
-  const recipe = decodeImageRecipe(qr.data);
+  if (!qr?.data) throw new Error('未识别到 Lark Signature Buddy QR 参数');
+  const recipe = decodeSignatureRecipe(qr.data);
   if (recipe.source.animated && kind.format !== 'gif') {
     throw new Error(
       '动图传输图已被复制链路转成静态图片；请从页面下载 GIF 文件后作为图片上传，不要右键复制',
@@ -109,7 +110,9 @@ export async function downloadMessageImage({
   profile,
   runLark,
 }) {
-  const directory = await mkdtemp('.image-buddy-');
+  const directory = await mkdtemp(
+    join(tmpdir(), 'lark-signature-buddy-download-'),
+  );
   // lark-cli appends an extension inferred from Content-Type when --output has
   // none, so always provide one and keep the path deterministic for readFile.
   const output = join(directory, 'source-image.png');

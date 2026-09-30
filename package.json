@@ -1,25 +1,43 @@
 {
-  "name": "image-buddy-local",
-  "version": "0.1.0",
-  "private": true,
+  "name": "lark-signature-buddy",
+  "version": "1.0.0",
+  "description": "A privacy-first Lark signature image slicer with a browser tool and companion bot.",
+  "keywords": [
+    "lark",
+    "feishu",
+    "signature",
+    "image",
+    "slicer"
+  ],
+  "homepage": "https://github.com/xavier-cai/lark-signature-buddy#readme",
+  "bugs": {
+    "url": "https://github.com/xavier-cai/lark-signature-buddy/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xavier-cai/lark-signature-buddy.git"
+  },
+  "license": "MIT",
   "type": "module",
-  "description": "Offline Lark document image slicer with a companion Image Key bot.",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "build:widget": "node build-widget.mjs",
-    "start:bot": "node bot.mjs",
-    "test": "node --test"
+    "build": "node scripts/build.mjs",
+    "check": "npm run lint && npm test && npm run build",
+    "lint": "eslint .",
+    "start:bot": "node apps/bot/src/main.js",
+    "test": "node --test tests/build.test.js tests/project.test.js"
   },
   "engines": {
     "node": ">=22"
   },
   "devDependencies": {
-    "esbuild": "^0.28.2"
-  },
-  "dependencies": {
-    "jsqr": "^1.4.0",
-    "modern-gif": "^2.1.0",
-    "qrcode": "^1.5.4",
-    "sharp": "^0.35.5",
-    "upng-js": "^2.1.0"
+    "@eslint/js": "10.0.1",
+    "esbuild": "0.28.2",
+    "eslint": "10.11.0",
+    "globals": "17.12.0"
   }
 }

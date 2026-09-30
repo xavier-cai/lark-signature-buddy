@@ -1,0 +1,20 @@
+[Unit]
+Description=Lark Signature Buddy bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/workspace/opensource/lark-signature-buddy
+Environment=PATH=%h/.ai-devbox/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Environment=LARK_SIGNATURE_BUDDY_PROFILE=lark-signature-buddy
+Environment=LARK_SIGNATURE_BUDDY_BATCH_DELAY_MS=1500
+Environment=LARK_SIGNATURE_BUDDY_MAX_BATCH_MS=5000
+ExecStart=/usr/bin/node %h/workspace/opensource/lark-signature-buddy/apps/bot/src/main.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

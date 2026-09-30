@@ -1,7 +1,7 @@
 import {
-  createImageRecipe,
-  encodeImageRecipe,
-} from './image-recipe.js';
+  createSignatureRecipe,
+  encodeSignatureRecipe,
+} from '@lark-signature-buddy/core/recipe';
 import QRCode from 'qrcode';
 import {
   compositionUnits,
@@ -9,19 +9,19 @@ import {
   parseGrid,
   selectionAspect,
   tileRects,
-} from './grid-core.js';
+} from '@lark-signature-buddy/core/grid';
 import {
   decodeImageFrames,
   encodeGifFrames,
   frameToCanvas,
-} from './animation-core.js';
-import { mapToLuminanceAlpha } from './color-mapping.js';
+} from '@lark-signature-buddy/core/animation';
+import { mapToLuminanceAlpha } from '@lark-signature-buddy/core/color-mapping';
 import {
   QR_QUIET_ZONE_MODULES,
   QR_MIN_MODULE_PIXELS,
   qrSizeForModules,
   transportLayoutForSource,
-} from './transport-core.js';
+} from '@lark-signature-buddy/core/transport';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const HANDLE_RADIUS = 9;
@@ -46,7 +46,6 @@ const framePicker = document.querySelector('#frame-picker');
 const colorMappingInput = document.querySelector('#color-mapping');
 const mappingWarning = document.querySelector('#mapping-warning');
 const modeOptions = document.querySelector('#mode-options');
-const gapControl = document.querySelector('#gap-control');
 const gapRatioInput = document.querySelector('#gap-ratio');
 const gapOutput = document.querySelector('#gap-output');
 const outputPreview = document.querySelector('#output-preview');
@@ -470,7 +469,6 @@ function resizeFromHandle(point, drag) {
   }
   const minWidth = Math.min(80, state.display.width * 0.2);
   width = Math.max(minWidth, width);
-  height = width / aspectDisplay;
   width = Math.min(width, opposite.sx > 0 ? state.display.width - opposite.x : opposite.x);
   height = width / aspectDisplay;
   if (height > (opposite.sy > 0 ? state.display.height - opposite.y : opposite.y)) {
@@ -623,8 +621,8 @@ function paintTransportFrame(context, frame, layout) {
 
 function currentRecipeToken(layout) {
   const { cols, rows } = currentGrid();
-  return encodeImageRecipe(
-    createImageRecipe({
+  return encodeSignatureRecipe(
+    createSignatureRecipe({
       sourceWidth: sourceWidth(),
       sourceHeight: sourceHeight(),
       sourceFrames: state.animation.frames.length,
@@ -756,7 +754,7 @@ function startAsyncCopyImage(blob) {
   }
 }
 
-async function copyImageRecipe() {
+async function createSignatureTransport() {
   if (!state.image || !state.file || !state.crop || generateButton.disabled) return;
   generateButton.disabled = true;
   spinner.hidden = false;
@@ -771,14 +769,14 @@ async function copyImageRecipe() {
     const animated = isAnimated();
     const extension = animated ? 'gif' : 'png';
     const formatLabel = animated ? 'GIF' : 'PNG';
-    transportDownload.download = `image-buddy-transport.${extension}`;
+    transportDownload.download = `lark-signature-transport.${extension}`;
     transportDetail.textContent =
       `${layout.canvasWidth} × ${layout.canvasHeight} · ${state.animation.frames.length} 帧 · ${state.colorMapping ? '色彩映射' : '原始色彩'} · ${recipeToken.length} 字符`;
     transportDebug.hidden = false;
     if (animated) {
       transportDownload.click();
       setNotice(
-        'GIF 中间图已下载；请将下载的 .gif 文件作为图片上传给图片仔。不要右键复制，浏览器会转成单帧 JPEG。',
+        'GIF 中间图已下载；请将下载的 .gif 文件作为图片上传给 Buddy Bot。不要右键复制，浏览器会转成单帧 JPEG。',
         'success',
       );
       return;
@@ -794,7 +792,7 @@ async function copyImageRecipe() {
       );
     }
     setNotice(
-      `已通过原生 ${formatLabel} 剪贴板复制带 QR 图片，请粘贴发送给图片仔`,
+      `已通过原生 ${formatLabel} 剪贴板复制带 QR 图片，请粘贴发送给 Buddy Bot`,
       'success',
     );
   } catch (error) {
@@ -823,7 +821,7 @@ uploadButton.addEventListener('click', () => fileInput.click());
 emptyStage.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => chooseFile(fileInput.files?.[0]));
 resetGridButton.addEventListener('click', resetCrop);
-generateButton.addEventListener('click', copyImageRecipe);
+generateButton.addEventListener('click', createSignatureTransport);
 transportPreview.addEventListener('contextmenu', (event) => {
   if (!isAnimated()) return;
   event.preventDefault();

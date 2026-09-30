@@ -7,19 +7,28 @@ import {
   eventBatchKey,
   extractImageKeys,
   formatGeneratedReply,
-} from './bot-core.mjs';
+} from './messages.js';
 import {
   decodeRecipeFromImage,
   downloadMessageImage,
-} from './bot-image.mjs';
-import { generateAndUploadTiles } from './bot-tiles.mjs';
+} from './image.js';
+import { SerialQueue } from './serial-queue.js';
+import { generateAndUploadTiles } from './tiles.js';
 
-const PROFILE = process.env.IMAGE_BUDDY_PROFILE || 'image-buddy';
-const DEBOUNCE_MS = Number.parseInt(process.env.IMAGE_BUDDY_BATCH_DELAY_MS || '1500', 10);
-const MAX_BATCH_MS = Number.parseInt(process.env.IMAGE_BUDDY_MAX_BATCH_MS || '5000', 10);
+const PROFILE =
+  process.env.LARK_SIGNATURE_BUDDY_PROFILE || 'lark-signature-buddy';
+const DEBOUNCE_MS = Number.parseInt(
+  process.env.LARK_SIGNATURE_BUDDY_BATCH_DELAY_MS || '1500',
+  10,
+);
+const MAX_BATCH_MS = Number.parseInt(
+  process.env.LARK_SIGNATURE_BUDDY_MAX_BATCH_MS || '5000',
+  10,
+);
 const DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
 const batches = new Map();
 const seenMessages = new Map();
+const processingQueue = new SerialQueue();
 let shuttingDown = false;
 
 function log(level, message, detail = {}) {
@@ -58,7 +67,7 @@ function runLark(args) {
 }
 
 function idempotencyKey(messageIds) {
-  return `ib_${createHash('sha256').update(messageIds.join(',')).digest('hex').slice(0, 32)}`;
+  return `lsb_${createHash('sha256').update(messageIds.join(',')).digest('hex').slice(0, 32)}`;
 }
 
 function userFacingDecodeError(error) {
@@ -77,11 +86,7 @@ function userFacingDecodeError(error) {
   return error.message;
 }
 
-async function replyToBatch(batchKey) {
-  const batch = batches.get(batchKey);
-  if (!batch) return;
-  clearTimeout(batch.timer);
-  batches.delete(batchKey);
+async function processBatch(batch) {
   const keys = [...new Set(batch.imageKeys)];
   let text;
   if (batch.errors.length > 0) {
@@ -98,7 +103,7 @@ async function replyToBatch(batchKey) {
         runLark,
       });
       const decoded = await decodeRecipeFromImage(input);
-      log('info', 'decoded image recipe', {
+      log('info', 'decoded signature recipe', {
         messageId: image.messageId,
         imageKey: image.imageKey,
         transportWidth: decoded.image.width,
@@ -114,14 +119,14 @@ async function replyToBatch(batchKey) {
         profile: PROFILE,
         runLark,
       });
-      log('info', 'generated and uploaded image tiles', {
+      log('info', 'generated and uploaded signature tiles', {
         messageId: image.messageId,
         sourceImageKey: image.imageKey,
         imageCount: generatedKeys.length,
       });
       text = formatGeneratedReply(generatedKeys, decoded.recipe);
     } catch (error) {
-      log('warn', 'failed to process image recipe', {
+      log('warn', 'failed to process signature recipe', {
         messageId: image.messageId,
         imageKey: image.imageKey,
         error: error.message,
@@ -155,6 +160,14 @@ async function replyToBatch(batchKey) {
       error: error.message,
     });
   }
+}
+
+function replyToBatch(batchKey) {
+  const batch = batches.get(batchKey);
+  if (!batch) return Promise.resolve();
+  clearTimeout(batch.timer);
+  batches.delete(batchKey);
+  return processingQueue.run(batchKey, () => processBatch(batch));
 }
 
 function scheduleBatch(event, { imageKeys = [], error = null }) {
@@ -194,6 +207,7 @@ function cleanupSeen() {
 }
 
 function handleEvent(event) {
+  if (shuttingDown) return;
   if (!event || event.type !== 'im.message.receive_v1') return;
   if (event.sender_type === 'bot') return;
   if (!event.message_id || seenMessages.has(event.message_id)) return;
@@ -249,15 +263,15 @@ consumer.once('close', (code) => {
   }
 });
 
-function shutdown(signal) {
+async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  log('info', 'stopping image buddy bot', { signal });
-  for (const key of [...batches.keys()]) {
-    void replyToBatch(key);
-  }
+  log('info', 'stopping lark signature buddy bot', { signal });
+  const pending = [...batches.keys()].map((key) => replyToBatch(key));
   consumer.kill('SIGTERM');
-  setTimeout(() => process.exit(0), 2000).unref();
+  await Promise.allSettled(pending);
+  await processingQueue.drain();
+  process.exitCode = 0;
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'));

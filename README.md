@@ -1,208 +1,160 @@
-# Image Buddy
+# Lark Signature Buddy
 
-飞书文档内的网格切图参数工具，以及配套的图片 Key Bot。
+A privacy-first image slicer for Lark and Feishu signatures. The browser tool
+prepares a QR-annotated transport image; the companion bot validates the
+recipe, renders the tiles, uploads them to Lark, and returns reusable image
+keys.
 
-## 项目结构
+> This project is not affiliated with or endorsed by Lark or ByteDance.
+
+## Highlights
+
+- Local-first editor: uploaded images stay in the browser until you send the
+  generated transport image to your bot.
+- Static and animated inputs: PNG, GIF, APNG, and browser-supported WebP.
+- Precise grids: 1–15 columns and rows, crop positioning, spacing preview, and
+  optional luminance-to-alpha mapping.
+- Shared core: the browser and bot consume the same strict recipe, grid,
+  resource-limit, animation, and tile-planning modules.
+- Static deployment: the web tool builds to one self-contained `dist/index.html`
+  and can run on GitHub Pages.
+
+The UI and bot responses are currently written in Simplified Chinese.
+
+## Architecture
 
 ```text
-image-buddy-local/
-├── public/
-│   ├── index.html       # 切图页面
-│   ├── app.js           # 选区与剪贴板交互
-│   ├── image-recipe.js  # 前端与 Bot 共用的严格版本协议
-│   ├── image-format.js  # 静态图/动图格式与尺寸检查
-│   ├── animation-core.js # GIF/APNG/WebP 解码与 GIF/APNG 编码
-│   ├── transport-core.js # 传输画布与 QR 尺寸计算
-│   ├── grid-core.js     # 网格与裁剪算法
-│   └── styles.css       # 页面样式
-├── bot.mjs              # 飞书长连接消费者
-├── bot-core.mjs         # image_key 提取、聚合和回复格式
-├── bot-image.mjs        # 消息图片下载与 QR 解码
-├── bot-tiles.mjs        # 服务端切图、上传与顺序编排
-├── build-widget.mjs     # 构建单文件 HTML5 Block
-├── project.test.mjs     # 算法与 Bot 逻辑测试
-├── test-fixtures/
-│   └── animated-apng.png # APNG 多帧回归样例
-├── systemd/
-│   └── image-buddy-bot.service
-└── package.json
+lark-signature-buddy/
+├── apps/
+│   ├── web/                 # Browser-only editor and transport generator
+│   └── bot/                 # Lark event consumer, image I/O, rendering/upload
+├── packages/
+│   └── core/                # Shared protocol, grid, codecs, limits, tile plan
+├── deploy/systemd/          # Optional user-service template
+├── docs/                    # Protocol and deployment documentation
+├── scripts/                 # Reproducible build entry points
+└── tests/                   # Unit and integration-style module tests
 ```
 
-## 使用流程
+The dependency direction is intentionally one-way:
 
-1. 在飞书文档的 HTML5 Block 中上传、拖拽或粘贴原图。
-2. 输入列数和行数（各 1–15），调整选区、模式与渲染间隔；动图可在网格
-   控制区下方选择任意帧作为裁剪参考。
-3. 按需切换色彩映射（默认开启），并通过“原始色彩 / 色彩映射后”双预览对比
-   最终组合效果。
-4. 点击主按钮，生成“原图区域 + 紧凑 QR”的中间传输图片。静态图使用 PNG，
-   动图使用兼容飞书消息的 GIF。
-5. 粘贴发送给“图片仔”Bot。
-6. Bot 下载图片，扫描并严格校验 V4 协议，按同一套网格算法生成子图，并根据
-   QR 中的开关决定是否执行色彩映射。
-7. Bot 将子图逐张上传到飞书，并回复全部 `image_key` 和对应妙笔链接。
+```text
+apps/web ─┐
+          ├──> packages/core
+apps/bot ─┘
+```
 
-浏览器剪贴板无法可靠地一次写入多张独立图片，因此前端只生成一张视觉内容和
-切图参数合成后的传输图片。原图不缩放；宽度不足 384 px 时左右补白，底部追加
-紧凑高纠错 QR。后续由 Bot 使用同一份协议和网格算法生成子图，避免两端
-对参数理解不同。
+`packages/core` does not depend on browser UI or Lark CLI behavior. The bot owns
+Lark transport and native image rendering; the web app owns DOM and clipboard
+interaction.
 
-## 共享切图协议
+## Requirements
 
-`public/image-recipe.js` 是前端和 Bot 的共同依赖：
+- Node.js 22 or newer
+- npm
+- A Chromium-based browser for the broadest animated WebP support
+- For the bot only:
+  - `lark-cli` available on `PATH`
+  - a Lark application with bot capability
+  - event subscription `im.message.receive_v1`
+  - permissions `im:message:send_as_bot`, `im:message:readonly`, and
+    `im:resource`
 
-- 前端直接导入它来创建并编码 payload。
-- 构建 HTML5 Block 时，它会与页面脚本一起内联。
-- Bot 直接导入它来提取、解码和严格校验 payload。
-
-当前只支持紧凑二进制 `IB4`。协议标记、payload 版本、字段集合或参数范围
-不一致时直接报错，不做任何前向或向后兼容。
-
-V4 字段包含：
-
-- 原图宽高
-- 静态/动图标记与帧数
-- 网格行列数
-- 归一化选区 `x/y/width/height`
-- `plain` / `precut` 模式
-- 间隔比例
-- 色彩映射开关
-- 目标子图宽高和格式
-
-编码后的 V4 token 固定不超过 64 个 ASCII 字符，写入纠错等级 H 的二维码。
-payload 额外记录原图在传输画布中的归一化 `contentRect`，Bot 后续可先剥离
-padding 和 QR 区域，再对原图执行切分。QR 不带标题和额外留白，仅保留标准
-4-module quiet zone；当前协议为 41 modules，按 1 px/module 约 49×49 px。
-切片结果按从左到右、从上到下排序。
-
-V4 前端可读取 GIF、APNG 和 Animated WebP：GIF 使用内置解码器，APNG 使用
-UPNG，Animated WebP 使用 Chromium `ImageDecoder`。动图中间传输统一编码为
-GIF，保留帧数、帧时长和循环信息；图片仔切片后统一输出 APNG。前端展示全部帧
-缩略图，并按原始帧时长播放最终组合预览。最多 120 帧、80 MP 总帧像素工作量、
-20 MB 传输文件。
-
-色彩映射开关写入 QR，不预处理传输图。图片仔切片后按文档方案将每个像素的 RGB
-转成加权亮度
-`0.2126R + 0.7152G + 0.0722B`，再以 `(255 - 亮度) × 原透明度` 生成新透明度。
-静态 PNG 与 APNG 均保留完整 8-bit 半透明通道。
-
-Bot 最多接受 15×15（225 张）切片，使用 4 个 worker 执行“裁剪一张 → 写入
-临时文件 → 上传 → 删除临时文件”。静态子图输出 512×512 PNG，动图子图输出
-512×512 APNG；RGBA、帧时长和循环信息保持不变。只有整批上传
-成功才回复妙笔链接；中途失败会返回批次错误，不返回不完整链接列表。
-
-页面在每次生成后显示实际中间传输图、画布尺寸、协议长度和下载链接。静态 PNG
-仍优先通过原生剪贴板复制；动图 GIF 直接下载，用户需要将下载文件作为图片上传
-给图片仔。禁止用浏览器右键“复制图片”，该路径会把 GIF 转成单帧 JPEG。
-
-## 构建文档组件
+## Quick start
 
 ```bash
-npm run build:widget
+git clone https://github.com/xavier-cai/lark-signature-buddy.git
+cd lark-signature-buddy
+npm ci
+npm run check
 ```
 
-产物位于 `dist/image-buddy-widget.html`。它是单文件离线 HTML，不依赖 Web
-Host，也不包含飞书 App Secret。
+Build the web application:
 
-## 启动 Bot
+```bash
+npm run build
+```
 
-Bot 使用飞书长连接，不需要公网 Webhook Host：
+Open `dist/index.html` through an HTTPS or local development server. The file is
+self-contained and can also be embedded as an HTML5 document block.
+
+## Run the bot
+
+The bot uses a Lark long-lived connection and does not require a public webhook.
+Create a `lark-cli` profile without putting the app secret in this repository:
+
+```bash
+read -rsp 'App Secret: ' LSB_APP_SECRET
+printf '\n'
+printf '%s' "$LSB_APP_SECRET" | lark-cli profile add \
+  --name lark-signature-buddy \
+  --app-id '<your-app-id>' \
+  --app-secret-stdin
+unset LSB_APP_SECRET
+```
+
+Start the process:
 
 ```bash
 npm run start:bot
 ```
 
-可选环境变量：
+Optional environment variables:
 
-- `IMAGE_BUDDY_PROFILE`：Lark CLI profile，默认 `image-buddy`
-- `IMAGE_BUDDY_BATCH_DELAY_MS`：连续图片静默聚合窗口，默认 `1500`
-- `IMAGE_BUDDY_MAX_BATCH_MS`：单批最长等待，默认 `5000`
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `LARK_SIGNATURE_BUDDY_PROFILE` | `lark-signature-buddy` | `lark-cli` profile |
+| `LARK_SIGNATURE_BUDDY_BATCH_DELAY_MS` | `1500` | Quiet aggregation window |
+| `LARK_SIGNATURE_BUDDY_MAX_BATCH_MS` | `5000` | Maximum aggregation window |
 
-应用需启用机器人能力，订阅 `im.message.receive_v1`，并开通单聊/群聊接收消息和
-`im:message:send_as_bot`、`im:message:readonly`、`im:resource` 权限。
-
-## systemd 常驻
-
-项目内保存了可审查的 unit 模板：
-
-```text
-systemd/image-buddy-bot.service
-```
-
-安装或更新（使用符号链接，项目内模板是唯一来源）：
+The provided user-service template assumes this repository lives at
+`~/workspace/opensource/lark-signature-buddy`:
 
 ```bash
 mkdir -p ~/.config/systemd/user
 ln -sfn \
-  "$PWD/systemd/image-buddy-bot.service" \
-  ~/.config/systemd/user/image-buddy-bot.service
+  "$PWD/deploy/systemd/lark-signature-buddy.service" \
+  ~/.config/systemd/user/lark-signature-buddy.service
 systemctl --user daemon-reload
-systemctl --user enable --now image-buddy-bot.service
+systemctl --user enable --now lark-signature-buddy.service
 ```
 
-如果项目不在 `~/workspace/opensource/image-buddy-local`，先同步修改 unit 中的
-`WorkingDirectory` 和 `ExecStart`。
+## GitHub Pages
 
-查看状态和日志：
+The included Pages workflow builds and deploys `dist/`. After pushing the
+repository, select **GitHub Actions** as the Pages source in repository
+settings. The bot remains a separate long-running process and is not hosted by
+GitHub Pages.
+
+## Protocol compatibility
+
+This rewrite deliberately has no compatibility layer. It accepts only the
+`LSB1:` recipe described in [docs/protocol.md](docs/protocol.md). Transport
+images produced by earlier Image Buddy builds, including `IB4:`, are rejected.
+
+## Development
 
 ```bash
-systemctl --user status image-buddy-bot.service
-journalctl --user -u image-buddy-bot.service -f
+npm test       # Node test runner
+npm run lint   # ESLint
+npm run build  # self-contained static application
+npm run check  # all of the above
 ```
 
-停止：
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+Security issues should follow [SECURITY.md](SECURITY.md), not public issues.
 
-```bash
-systemctl --user disable --now image-buddy-bot.service
-```
+## Privacy and security
 
-## App Secret 管理
+- The web tool performs image decoding, previews, cropping, and transport
+  generation locally.
+- The bot receives only images explicitly sent to its Lark conversation.
+- App credentials belong in the operating-system keychain through a
+  `lark-cli` profile, never in source, command arguments, logs, or GitHub
+  Actions.
+- Temporary bot files are created under the operating-system temporary
+  directory and removed after processing.
 
-App Secret 不属于项目文件，也不写入 systemd unit、环境变量文件、源码或 Git。
-使用 `lark-cli` profile 管理：
+## License
 
-```bash
-read -rsp 'App Secret: ' IMAGE_BUDDY_SECRET
-printf '\n'
-printf '%s' "$IMAGE_BUDDY_SECRET" | lark-cli profile add \
-  --name image-buddy \
-  --app-id cli_aa31b54ea9b85bcf \
-  --app-secret-stdin
-unset IMAGE_BUDDY_SECRET
-```
-
-当前机器上，`~/.lark-cli/config.json` 权限为 `0600`，只保存
-`source: keychain` 的引用；实际 Secret 存储在操作系统原生 keychain 中。
-`image-buddy-bot.service` 只配置 profile 名 `image-buddy`，运行时由
-`lark-cli` 从 keychain 取 Secret，因此不会把 Secret 暴露在：
-
-- Git 仓库
-- systemd unit
-- 进程参数
-- shell history
-- 服务日志
-
-检查配置时使用：
-
-```bash
-lark-cli config show --profile image-buddy
-```
-
-该命令只显示掩码 `****`，不会回显 Secret。
-
-轮换 Secret 时，不要在命令参数或聊天中传明文。先在飞书开放平台重置 Secret，
-再从标准输入更新同名 profile；如果当前 CLI 不支持覆盖同名 profile，先停止 Bot，
-显式移除并按上面的 `--app-secret-stdin` 命令重建 profile，最后重启服务。
-
-## 测试
-
-```bash
-npm test
-```
-
-## 安全与运行边界
-
-- 选区和参数编码在浏览器内完成，原图通过用户粘贴上传到飞书。
-- Bot 下载消息图片、扫描 QR、生成并上传子图，再回复妙笔链接。
-- Bot 以 `message_id` 去重，并为回复生成幂等 key。
-- 长连接不需要公网 Host，但当前机器和 systemd 服务必须在线。
+[MIT](LICENSE)
