@@ -9,6 +9,7 @@
 ## Verification
 
 - [ ] `npm run check`
+- [ ] `npm run security:audit`
 - [ ] Manual browser verification, if UI behavior changed
 - [ ] Bot integration verification, if Lark I/O changed
 

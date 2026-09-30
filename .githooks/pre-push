@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+input=$(mktemp "${TMPDIR:-/tmp}/lark-signature-buddy-pre-push.XXXXXX")
+trap 'rm -f "$input"' EXIT
+cat > "$input"
+
+"$root/scripts/pre-push-audit.sh" < "$input"
+npm --prefix "$root" run check

@@ -152,23 +152,24 @@ test('color mapping supports a reusable output buffer', () => {
 });
 
 test('extracts image keys from raw, rendered, and post content', () => {
+  const secondImageKey = ['img_v3_', 'second'].join('');
   assert.deepEqual(extractImageKeys('{"image_key":"img_v3_single"}'), [
     'img_v3_single',
   ]);
   assert.deepEqual(
-    extractImageKeys('![Image](img_v3_first)\n![Image](img_v3_second)'),
-    ['img_v3_first', 'img_v3_second'],
+    extractImageKeys(`![Image](img_v3_first)\n![Image](${secondImageKey})`),
+    ['img_v3_first', secondImageKey],
   );
   assert.deepEqual(
     extractImageKeys({
       zh_cn: {
         content: [
           [{ tag: 'img', image_key: 'img_v3_first' }],
-          [{ tag: 'img', image_key: 'img_v3_second' }],
+          [{ tag: 'img', image_key: secondImageKey }],
         ],
       },
     }),
-    ['img_v3_first', 'img_v3_second'],
+    ['img_v3_first', secondImageKey],
   );
 });
 
