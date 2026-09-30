@@ -28,8 +28,13 @@
     "build": "node scripts/build.mjs",
     "check": "npm run lint && npm test && npm run build",
     "lint": "eslint .",
+    "security:audit": "bash scripts/security-audit.sh --scope history",
+    "security:audit:release": "bash scripts/security-audit.sh --scope release",
+    "security:audit:remote": "bash scripts/audit-remote-refs.sh",
+    "security:hooks": "bash scripts/install-hooks.sh",
+    "security:install": "bash scripts/install-security-tools.sh",
     "start:bot": "node apps/bot/src/main.js",
-    "test": "node --test tests/build.test.js tests/project.test.js"
+    "test": "node --test tests/build.test.js tests/project.test.js tests/security-gate.test.js"
   },
   "engines": {
     "node": ">=22"

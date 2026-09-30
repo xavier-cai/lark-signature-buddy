@@ -66,6 +66,8 @@ interaction.
 git clone https://github.com/xavier-cai/lark-signature-buddy.git
 cd lark-signature-buddy
 npm ci
+npm run security:install
+npm run security:hooks
 npm run check
 ```
 
@@ -139,6 +141,9 @@ npm test       # Node test runner
 npm run lint   # ESLint
 npm run build  # self-contained static application
 npm run check  # all of the above
+npm run security:audit         # tracked files and reachable history
+npm run security:audit:release # history plus untracked release candidates
+npm run security:audit:remote  # remote branches, tags, and PR heads
 ```
 
 Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
@@ -154,6 +159,13 @@ Security issues should follow [SECURITY.md](SECURITY.md), not public issues.
   Actions.
 - Temporary bot files are created under the operating-system temporary
   directory and removed after processing.
+- Gitleaks v8.30.1 is installed from its official release with a pinned
+  SHA-256 digest. Local commit/push hooks and GitHub CI block detected private
+  keys or credentials with fully redacted scanner output. GitHub Secret
+  Scanning and Push Protection provide the hosted boundary.
+
+See [docs/security-gates.md](docs/security-gates.md) for the complete gate map
+and release procedure.
 
 ## License
 

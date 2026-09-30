@@ -2,6 +2,7 @@ dist/
 coverage/
 node_modules/
 npm-debug.log*
+.tools/
 .image-buddy-*/
 .lark-signature-buddy-*/
 logs/
