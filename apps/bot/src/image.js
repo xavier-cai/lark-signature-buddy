@@ -1,107 +1,140 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  unlink,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import {
+  isAbsolute,
+  join,
+  relative,
+} from 'node:path';
+import process from 'node:process';
 
-import jsQR from 'jsqr';
 import sharp from 'sharp';
 
 import { decodeImageBytes } from '@lark-signature-buddy/core/animation';
-import { detectImageKind } from '@lark-signature-buddy/core/image-format';
-import { decodeSignatureRecipe } from '@lark-signature-buddy/core/recipe';
+import {
+  detectImageKind,
+  validateStaticImageSize,
+} from '@lark-signature-buddy/core/image-format';
+import { validateAnimationWork } from '@lark-signature-buddy/core/transport';
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_IMAGE_PIXELS = 80 * 1024 * 1024;
+const DOWNLOAD_STAGING_NAME = '.lark-signature-buddy-downloads';
 
-export async function decodeRecipeFromImage(input) {
+function downloadStagingRoot(workingDirectory = process.cwd()) {
+  return join(workingDirectory, DOWNLOAD_STAGING_NAME);
+}
+
+export async function prepareDownloadStaging(
+  workingDirectory = process.cwd(),
+) {
+  const root = downloadStagingRoot(workingDirectory);
+  await rm(root, { recursive: true, force: true });
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  return root;
+}
+
+async function decodeAnimatedWebp(bytes) {
+  const metadata = await sharp(bytes, {
+    animated: true,
+    limitInputPixels: MAX_IMAGE_PIXELS,
+    failOn: 'warning',
+  }).metadata();
+  const { data, info } = await sharp(bytes, {
+    animated: true,
+    limitInputPixels: MAX_IMAGE_PIXELS,
+    failOn: 'warning',
+  })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const pages = info.pages || 1;
+  const height = info.pageHeight || info.height / pages;
+  validateStaticImageSize(info.width, height);
+  validateAnimationWork(info.width, height, pages);
+  const frameBytes = info.width * height * 4;
+  return {
+    width: info.width,
+    height,
+    frames: Array.from({ length: pages }, (_, index) => {
+      const start = index * frameBytes;
+      return {
+        data: new Uint8ClampedArray(
+          data.buffer,
+          data.byteOffset + start,
+          frameBytes,
+        ),
+        delay: Math.max(20, metadata.delay?.[index] || 100),
+      };
+    }),
+    loop: metadata.loop ?? 0,
+  };
+}
+
+export async function inspectSourceImage(input, recipe) {
   if (!input || input.length === 0) throw new Error('下载的图片为空');
   if (input.length > MAX_IMAGE_BYTES) throw new Error('图片超过 20 MB 处理上限');
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   const kind = detectImageKind(bytes);
-  const animation =
-    kind.animated ? await decodeImageBytes(bytes) : null;
-  let width;
-  let pageHeight;
-  let pages;
-  let delays;
-  let loop;
-  let format;
-  let scanner;
+  const animation = kind.animated
+    ? kind.format === 'webp'
+      ? await decodeAnimatedWebp(bytes)
+      : await decodeImageBytes(bytes)
+    : null;
+  let image;
   if (animation) {
-    width = animation.width;
-    pageHeight = animation.height;
-    pages = animation.frames.length;
-    delays = animation.frames.map((frame) => frame.delay);
-    loop = animation.loop;
-    scanner = sharp(Buffer.from(animation.frames[0].data), {
-      raw: {
-        width,
-        height: pageHeight,
-        channels: 4,
-      },
-      limitInputPixels: MAX_IMAGE_PIXELS,
-      failOn: 'warning',
-    });
-    format = kind.format;
+    image = {
+      ...animation,
+      pages: animation.frames.length,
+      delay: animation.frames.map((frame) => frame.delay),
+      format: kind.format,
+    };
   } else {
-    scanner = sharp(bytes, {
+    const metadata = await sharp(bytes, {
       page: 0,
       pages: 1,
       limitInputPixels: MAX_IMAGE_PIXELS,
       failOn: 'warning',
-    });
-    const metadata = await scanner.metadata();
-    width = metadata.width || 0;
-    pageHeight = metadata.height || 0;
-    pages = 1;
-    delays = [100];
-    loop = 0;
-    format = metadata.format || 'unknown';
+    }).metadata();
+    validateStaticImageSize(metadata.width || 0, metadata.height || 0);
+    image = {
+      width: metadata.width || 0,
+      height: metadata.height || 0,
+      pages: 1,
+      delay: [100],
+      loop: 0,
+      format: metadata.format || 'unknown',
+    };
   }
-  const scanHeight = Math.min(pageHeight, 1024);
-  scanner = scanner.extract({
-    left: 0,
-    top: pageHeight - scanHeight,
-    width,
-    height: scanHeight,
-  });
-  if (width > 2048) scanner = scanner.resize({ width: 2048 });
-  const { data, info } = await scanner
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  const pixels = new Uint8ClampedArray(
-    data.buffer,
-    data.byteOffset,
-    data.byteLength,
-  );
-  const qr = jsQR(pixels, info.width, info.height, {
-    inversionAttempts: 'dontInvert',
-  });
-  if (!qr?.data) throw new Error('未识别到 Lark Signature Buddy QR 参数');
-  const recipe = decodeSignatureRecipe(qr.data);
-  if (recipe.source.animated && kind.format !== 'gif') {
+  if (
+    image.width !== recipe.source.width ||
+    image.height !== recipe.source.height
+  ) {
     throw new Error(
-      '动图传输图已被复制链路转成静态图片；请从页面下载 GIF 文件后作为图片上传，不要右键复制',
+      `原图片尺寸不一致：配置 ${recipe.source.width}×${recipe.source.height}，实际 ${image.width}×${image.height}`,
     );
   }
-  if (recipe.source.frames !== pages) {
+  if (image.pages !== recipe.source.frames) {
     throw new Error(
-      `动图帧数不一致：参数 ${recipe.source.frames} 帧，飞书下载结果 ${pages} 帧`,
+      `原图片帧数不一致：配置 ${recipe.source.frames} 帧，实际 ${image.pages} 帧`,
     );
   }
-
-  return {
-    recipe,
-    token: qr.data,
-    image: {
-      width,
-      height: pageHeight,
-      pages,
-      delay: delays,
-      loop,
-      format,
-    },
-  };
+  const contentRect = recipe.transport.contentRect;
+  if (
+    contentRect.x !== 0 ||
+    contentRect.y !== 0 ||
+    contentRect.width !== 1 ||
+    contentRect.height !== 1
+  ) {
+    throw new Error('配置字符串不是原图直传格式，请在新版页面中重新生成');
+  }
+  return image;
 }
 
 export async function downloadMessageImage({
@@ -109,13 +142,26 @@ export async function downloadMessageImage({
   imageKey,
   profile,
   runLark,
+  workingDirectory = process.cwd(),
 }) {
-  const directory = await mkdtemp(
+  const stagingRoot = downloadStagingRoot(workingDirectory);
+  await mkdir(stagingRoot, { recursive: true, mode: 0o700 });
+  const stagingDirectory = await mkdtemp(
+    join(stagingRoot, 'request-'),
+  );
+  const temporaryDirectory = await mkdtemp(
     join(tmpdir(), 'lark-signature-buddy-download-'),
   );
-  // lark-cli appends an extension inferred from Content-Type when --output has
-  // none, so always provide one and keep the path deterministic for readFile.
-  const output = join(directory, 'source-image.png');
+  const stagingOutput = join(stagingDirectory, 'source-image.png');
+  const relativeOutput = relative(workingDirectory, stagingOutput);
+  if (
+    isAbsolute(relativeOutput) ||
+    relativeOutput === '..' ||
+    relativeOutput.startsWith('../')
+  ) {
+    throw new Error('下载 staging 路径必须位于运行目录内');
+  }
+  const temporaryOutput = join(temporaryDirectory, 'source-image.png');
   try {
     await runLark([
       'im',
@@ -131,11 +177,16 @@ export async function downloadMessageImage({
       '--type',
       'image',
       '--output',
-      output,
+      relativeOutput,
       '--json',
     ]);
-    return await readFile(output);
+    await copyFile(stagingOutput, temporaryOutput);
+    await unlink(stagingOutput);
+    return await readFile(temporaryOutput);
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await Promise.all([
+      rm(stagingDirectory, { recursive: true, force: true }),
+      rm(temporaryDirectory, { recursive: true, force: true }),
+    ]);
   }
 }

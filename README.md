@@ -1,19 +1,21 @@
 # Lark Signature Buddy
 
 A privacy-first image slicer for Lark and Feishu signatures. The browser tool
-prepares a QR-annotated transport image; the companion bot validates the
-recipe, renders the tiles, uploads them to Lark, and returns reusable image
-keys.
+prepares a compact configuration string; the companion bot combines it with
+the original image, renders the tiles, uploads them to Lark, and returns
+reusable image keys.
 
 > This project is not affiliated with or endorsed by Lark or ByteDance.
 
 ## Highlights
 
 - Local-first editor: uploaded images stay in the browser until you send the
-  generated transport image to your bot.
+  original image and generated configuration string to your bot.
 - Static and animated inputs: PNG, GIF, APNG, and browser-supported WebP.
-- Precise grids: 1–15 columns and rows, crop positioning, spacing preview, and
-  optional luminance-to-alpha mapping.
+- Lazy animation editing: supported browsers decode visible frames on demand,
+  while the frame picker virtualizes long animations.
+- Precise grids: 1–13 columns and 1–5 rows, independent preview/pre-crop
+  spacing controls, and optional luminance-to-alpha mapping.
 - Shared core: the browser and bot consume the same strict recipe, grid,
   resource-limit, animation, and tile-planning modules.
 - Static deployment: the web tool builds to one self-contained `dist/index.html`
@@ -26,7 +28,7 @@ The UI and bot responses are currently written in Simplified Chinese.
 ```text
 lark-signature-buddy/
 ├── apps/
-│   ├── web/                 # Browser-only editor and transport generator
+│   ├── web/                 # Browser-only editor and configuration generator
 │   └── bot/                 # Lark event consumer, image I/O, rendering/upload
 ├── packages/
 │   └── core/                # Shared protocol, grid, codecs, limits, tile plan
@@ -45,7 +47,7 @@ apps/bot ─┘
 ```
 
 `packages/core` does not depend on browser UI or Lark CLI behavior. The bot owns
-Lark transport and native image rendering; the web app owns DOM and clipboard
+Lark messages and native image rendering; the web app owns DOM and clipboard
 interaction.
 
 ## Requirements
@@ -106,8 +108,7 @@ Optional environment variables:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `LARK_SIGNATURE_BUDDY_PROFILE` | `lark-signature-buddy` | `lark-cli` profile |
-| `LARK_SIGNATURE_BUDDY_BATCH_DELAY_MS` | `1500` | Quiet aggregation window |
-| `LARK_SIGNATURE_BUDDY_MAX_BATCH_MS` | `5000` | Maximum aggregation window |
+| `LARK_SIGNATURE_BUDDY_REQUEST_TTL_MS` | `600000` | Partial request lifetime |
 
 The provided user-service template assumes this repository lives at
 `~/workspace/opensource/lark-signature-buddy`:
@@ -151,9 +152,10 @@ Security issues should follow [SECURITY.md](SECURITY.md), not public issues.
 
 ## Privacy and security
 
-- The web tool performs image decoding, previews, cropping, and transport
+- The web tool performs image decoding, previews, cropping, and configuration
   generation locally.
-- The bot receives only images explicitly sent to its Lark conversation.
+- The bot receives only images and configuration strings explicitly sent to
+  its Lark conversation.
 - App credentials belong in the operating-system keychain through a
   `lark-cli` profile, never in source, command arguments, logs, or GitHub
   Actions.

@@ -1,9 +1,17 @@
+export const MAX_GRID_COLS = 13;
+export const MAX_GRID_ROWS = 5;
+
 export function parseGrid(value) {
   const match = /^(\d{1,2})x(\d{1,2})$/.exec(value);
   if (!match) throw new Error(`Unsupported grid: ${value}`);
   const cols = Number(match[1]);
   const rows = Number(match[2]);
-  if (cols < 1 || cols > 15 || rows < 1 || rows > 15) {
+  if (
+    cols < 1 ||
+    cols > MAX_GRID_COLS ||
+    rows < 1 ||
+    rows > MAX_GRID_ROWS
+  ) {
     throw new Error(`Unsupported grid: ${value}`);
   }
   return { cols, rows };

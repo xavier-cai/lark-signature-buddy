@@ -1,3 +1,9 @@
+import {
+  MAX_GRID_COLS,
+  MAX_GRID_ROWS,
+} from './grid.js';
+import { DEFAULT_COLOR_MAPPING_GAMMA } from './color-mapping.js';
+
 export const SIGNATURE_RECIPE_NAME = 'lark-signature-buddy';
 export const SIGNATURE_RECIPE_VERSION = 1;
 export const SIGNATURE_RECIPE_PREFIX = `LSB${SIGNATURE_RECIPE_VERSION}:`;
@@ -13,6 +19,11 @@ const FORMAT_TO_CODE = new Map([
   ['apng', 1],
 ]);
 const NORMALIZED_MAX = 65535;
+const GAMMA_MIN = 0;
+const GAMMA_MAX = 3;
+const GAMMA_STEP = 0.1;
+const GAMMA_SHIFT = 1;
+const GAMMA_MASK = 0x3e;
 
 function fail(message) {
   throw new Error(`切图参数无效：${message}`);
@@ -71,6 +82,15 @@ function quantizeNormalized(value) {
   return uint16ToNormalized(normalizedToUint16(value));
 }
 
+function gammaToCode(value) {
+  return Math.round(value / GAMMA_STEP) + 1;
+}
+
+function codeToGamma(code) {
+  if (code === 0) return 1;
+  return round((code - 1) * GAMMA_STEP);
+}
+
 function encodeBase64Url(bytes) {
   let binary = '';
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -116,6 +136,7 @@ export function validateSignatureRecipe(value) {
       'mode',
       'gapRatio',
       'colorMapping',
+      'colorMappingGamma',
       'output',
       'transport',
     ],
@@ -134,20 +155,34 @@ export function validateSignatureRecipe(value) {
   if (typeof value.source.animated !== 'boolean') {
     fail('source.animated 必须是 boolean');
   }
-  assertInteger(value.source.frames, 1, 120, 'source.frames');
+  assertInteger(value.source.frames, 1, 65535, 'source.frames');
   if (value.source.animated !== (value.source.frames > 1)) {
     fail('source.animated 与 source.frames 不一致');
   }
 
   assertExactKeys(value.grid, ['cols', 'rows'], 'grid');
-  assertInteger(value.grid.cols, 1, 15, 'grid.cols');
-  assertInteger(value.grid.rows, 1, 15, 'grid.rows');
+  assertInteger(value.grid.cols, 1, MAX_GRID_COLS, 'grid.cols');
+  assertInteger(value.grid.rows, 1, MAX_GRID_ROWS, 'grid.rows');
   assertRect(value.crop, 'crop');
 
   if (!MODE_TO_CODE.has(value.mode)) fail('mode 必须是 plain 或 precut');
   assertNumber(value.gapRatio, 0, 1, 'gapRatio');
   if (typeof value.colorMapping !== 'boolean') {
     fail('colorMapping 必须是 boolean');
+  }
+  assertNumber(
+    value.colorMappingGamma,
+    GAMMA_MIN,
+    GAMMA_MAX,
+    'colorMappingGamma',
+  );
+  if (
+    Math.abs(
+      value.colorMappingGamma -
+      codeToGamma(gammaToCode(value.colorMappingGamma)),
+    ) > 0.00001
+  ) {
+    fail(`colorMappingGamma 步长必须为 ${GAMMA_STEP}`);
   }
 
   assertExactKeys(value.output, ['width', 'height', 'format'], 'output');
@@ -175,6 +210,7 @@ export function createSignatureRecipe({
   mode,
   gapRatio,
   colorMapping,
+  colorMappingGamma = DEFAULT_COLOR_MAPPING_GAMMA,
   outputSize,
   contentRect,
 }) {
@@ -197,6 +233,7 @@ export function createSignatureRecipe({
     mode,
     gapRatio: quantizeNormalized(gapRatio),
     colorMapping,
+    colorMappingGamma,
     output: {
       width: outputSize,
       height: outputSize,
@@ -222,6 +259,7 @@ export function encodeSignatureRecipe(recipe) {
   bytes[2] = SIGNATURE_RECIPE_VERSION;
   bytes[3] =
     MODE_TO_CODE.get(value.mode) |
+    (gammaToCode(value.colorMappingGamma) << GAMMA_SHIFT) |
     (value.colorMapping ? 0x40 : 0) |
     (value.source.animated ? 0x80 : 0);
   view.setUint32(4, value.source.width);
@@ -266,7 +304,7 @@ export function decodeSignatureRecipe(token) {
   if (bytes[0] !== 0x4c || bytes[1] !== 0x53) fail('magic 不匹配');
   if (bytes[2] !== markerVersion) fail('协议标记与 payload 版本不一致');
   if (view.getUint32(37) !== crc32(bytes.subarray(0, 37))) fail('CRC32 校验失败');
-  const modeCode = bytes[3] & 0x3f;
+  const modeCode = bytes[3] & 0x01;
   const mode = [...MODE_TO_CODE].find(([, code]) => code === modeCode)?.[0];
   if (!mode) fail('mode 编码未知');
   const format = [...FORMAT_TO_CODE].find(([, code]) => code === bytes[34])?.[0];
@@ -294,6 +332,9 @@ export function decodeSignatureRecipe(token) {
     mode,
     gapRatio: normalized[4],
     colorMapping: Boolean(bytes[3] & 0x40),
+    colorMappingGamma: codeToGamma(
+      (bytes[3] & GAMMA_MASK) >> GAMMA_SHIFT,
+    ),
     output: {
       width: view.getUint16(32),
       height: view.getUint16(32),

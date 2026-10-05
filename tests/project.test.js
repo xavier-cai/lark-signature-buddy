@@ -1,34 +1,64 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import QRCode from 'qrcode';
 import sharp from 'sharp';
-import { readFile, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { relative } from 'node:path';
+import {
+  dirname,
+  isAbsolute,
+  join,
+} from 'node:path';
 
 import {
-  decodeRecipeFromImage,
   downloadMessageImage,
+  inspectSourceImage,
+  prepareDownloadStaging,
 } from '../apps/bot/src/image.js';
 import {
   decodeImageBytes,
   encodeApngFrames,
   encodeGifFrames,
+  openImageFrames,
 } from '@lark-signature-buddy/core/animation';
-import { mapToLuminanceAlpha } from '@lark-signature-buddy/core/color-mapping';
+import {
+  DEFAULT_COLOR_MAPPING_GAMMA,
+  mapToLuminanceAlpha,
+  preprocessLarkSignature,
+  renderLarkMobile,
+  renderLarkPc,
+} from '@lark-signature-buddy/core/color-mapping';
 import {
   generateAndUploadTiles,
+  prepareUploadStaging,
   renderTile,
 } from '../apps/bot/src/tiles.js';
 import { buildTileSpecs } from '@lark-signature-buddy/core/tiles';
 import {
   eventBatchKey,
   extractImageKeys,
+  extractRecipeTokens,
   formatGeneratedReply,
   formatRecipeReceipt,
 } from '../apps/bot/src/messages.js';
+import {
+  FRAME_OPTION_STEP,
+  visibleFrameRange,
+} from '../apps/web/src/frame-window.js';
+import {
+  LARK_SIGNATURE_TILE_SIZE,
+  previewLayout,
+} from '../apps/web/src/preview-layout.js';
+import { mergeRequestState } from '../apps/bot/src/request-state.js';
 import { SerialQueue } from '../apps/bot/src/serial-queue.js';
+import { writeApngFile } from '../apps/bot/src/apng-stream.js';
 import {
   createSignatureRecipe,
   decodeSignatureRecipe,
@@ -46,16 +76,14 @@ import {
   isAnimatedImageBytes,
   validateStaticImageSize,
 } from '@lark-signature-buddy/core/image-format';
-import {
-  qrSizeForModules,
-  transportLayoutForSource,
-} from '@lark-signature-buddy/core/transport';
+import { validateAnimationWork } from '@lark-signature-buddy/core/transport';
 
 test('parses supported grids', () => {
   assert.deepEqual(parseGrid('2x3'), { cols: 2, rows: 3 });
-  assert.deepEqual(parseGrid('15x15'), { cols: 15, rows: 15 });
+  assert.deepEqual(parseGrid('13x5'), { cols: 13, rows: 5 });
   assert.throws(() => parseGrid('0x4'), /Unsupported grid/);
-  assert.throws(() => parseGrid('16x2'), /Unsupported grid/);
+  assert.throws(() => parseGrid('14x2'), /Unsupported grid/);
+  assert.throws(() => parseGrid('2x6'), /Unsupported grid/);
 });
 
 test('plain mode divides the selected area without gaps', () => {
@@ -85,13 +113,13 @@ test('precut mode reserves predictable gaps between square tiles', () => {
   assert.ok(Math.abs(tiles[2].y - (tile + gap)) < 1e-9);
 });
 
-test('supports the maximum 15x15 grid', () => {
+test('supports the maximum 13x5 grid', () => {
   const crop = { x: 0, y: 0, width: 1, height: 1 };
-  const tiles = tileRects(crop, 15, 15, 'precut', 0.58);
-  assert.equal(tiles.length, 225);
+  const tiles = tileRects(crop, 13, 5, 'precut', 0.58);
+  assert.equal(tiles.length, 65);
   assert.deepEqual(
     tiles.map(({ row, col }) => [row, col]).at(-1),
-    [14, 14],
+    [4, 12],
   );
   const last = tiles.at(-1);
   assert.ok(Math.abs(last.x + last.width - 1) < 1e-9);
@@ -109,8 +137,8 @@ test('composition units always include actual renderer gaps', () => {
     widthUnits: 2.58,
     heightUnits: 2.58,
   });
-  assert.deepEqual(compositionUnits(15, 1, 0.25), {
-    widthUnits: 18.5,
+  assert.deepEqual(compositionUnits(13, 1, 0.25), {
+    widthUnits: 16,
     heightUnits: 1,
   });
 });
@@ -151,6 +179,48 @@ test('color mapping supports a reusable output buffer', () => {
   );
 });
 
+test('gamma brightens G RGB without changing mobile alpha', () => {
+  const source = new Uint8ClampedArray([128, 128, 128, 200]);
+  const baseline = preprocessLarkSignature(source, undefined, 1);
+  const brightened = preprocessLarkSignature(source, undefined, 0.8);
+  assert.ok(brightened[0] > baseline[0]);
+  assert.equal(brightened[3], baseline[3]);
+});
+
+test('separates preprocessing G from PC and mobile rendering F', () => {
+  const source = new Uint8ClampedArray([
+    255, 255, 255, 255,
+    0, 0, 0, 128,
+  ]);
+  const preprocessed = preprocessLarkSignature(
+    source,
+    undefined,
+    DEFAULT_COLOR_MAPPING_GAMMA,
+  );
+  assert.deepEqual(Array.from(preprocessed), [
+    254, 254, 254, 1,
+    0, 0, 0, 128,
+  ]);
+  assert.deepEqual(
+    Array.from(renderLarkPc(preprocessed)),
+    [
+      51, 112, 254, 1,
+      0, 0, 0, 128,
+    ],
+  );
+  assert.deepEqual(
+    Array.from(renderLarkMobile(preprocessed)),
+    [
+      51, 112, 255, 1,
+      51, 112, 255, 128,
+    ],
+  );
+  assert.throws(
+    () => renderLarkPc(source, [51, 112]),
+    /遮罩颜色/,
+  );
+});
+
 test('extracts image keys from raw, rendered, and post content', () => {
   const secondImageKey = ['img_v3_', 'second'].join('');
   assert.deepEqual(extractImageKeys('{"image_key":"img_v3_single"}'), [
@@ -180,6 +250,63 @@ test('deduplicates repeated image keys', () => {
   );
 });
 
+test('extracts recipe tokens from plain and structured content', () => {
+  const first = `LSB1:${'A'.repeat(54)}-`;
+  const second = `LSB1:${'b'.repeat(54)}_`;
+  assert.deepEqual(
+    extractRecipeTokens(`配置：${first}\n${first}`),
+    [first],
+  );
+  assert.deepEqual(
+    extractRecipeTokens({ text: second }),
+    [second],
+  );
+});
+
+test('request state accepts image and recipe together or in either order', () => {
+  const token = `LSB1:${'A'.repeat(55)}`;
+  const imageFirst = mergeRequestState({}, {
+    imageKeys: ['img_source'],
+    messageId: 'om_image',
+    now: 1,
+  });
+  assert.equal(imageFirst.status, 'waiting_recipe');
+  const imageThenRecipe = mergeRequestState(imageFirst.state, {
+    recipeTokens: [token],
+    messageId: 'om_recipe',
+    now: 2,
+  });
+  assert.equal(imageThenRecipe.status, 'ready');
+  assert.equal(imageThenRecipe.request.image.messageId, 'om_image');
+  assert.equal(imageThenRecipe.request.recipeToken, token);
+
+  const recipeFirst = mergeRequestState({}, {
+    recipeTokens: [token],
+    messageId: 'om_recipe',
+    now: 3,
+  });
+  assert.equal(recipeFirst.status, 'waiting_image');
+  const recipeThenImage = mergeRequestState(recipeFirst.state, {
+    imageKeys: ['img_source'],
+    messageId: 'om_image',
+    now: 4,
+  });
+  assert.equal(recipeThenImage.status, 'ready');
+
+  const together = mergeRequestState({}, {
+    imageKeys: ['img_source'],
+    recipeTokens: [token],
+    messageId: 'om_both',
+    now: 5,
+  });
+  assert.equal(together.status, 'ready');
+  assert.match(together.message, /正在处理/);
+  assert.equal(
+    mergeRequestState({}, { messageId: 'om_other' }).status,
+    'invalid',
+  );
+});
+
 test('groups image messages by chat, sender, and thread context', () => {
   assert.equal(
     eventBatchKey({
@@ -195,22 +322,224 @@ test('groups image messages by chat, sender, and thread context', () => {
   );
 });
 
-test('downloads message images to an explicit extension path', async () => {
+test('virtualizes long frame pickers with an initial 20-frame window', () => {
+  assert.deepEqual(
+    visibleFrameRange({
+      scrollLeft: 0,
+      viewportWidth: 500,
+      frameCount: 1798,
+    }),
+    { start: 0, end: 20 },
+  );
+  assert.deepEqual(
+    visibleFrameRange({
+      scrollLeft: 900 * FRAME_OPTION_STEP,
+      viewportWidth: 500,
+      frameCount: 1798,
+    }),
+    { start: 894, end: 912 },
+  );
+  assert.deepEqual(
+    visibleFrameRange({
+      scrollLeft: 1797 * FRAME_OPTION_STEP,
+      viewportWidth: 500,
+      frameCount: 1798,
+    }),
+    { start: 1791, end: 1798 },
+  );
+});
+
+test('actual-size preview matches the 28px Lark icon and 44px cycle', () => {
+  assert.equal(LARK_SIGNATURE_TILE_SIZE, 28);
+  assert.deepEqual(
+    previewLayout({
+      cols: 6,
+      rows: 4,
+      gapRatio: 0.58,
+      availableWidth: 280,
+      actualSize: true,
+    }),
+    {
+      tileSize: 28,
+      gap: 16,
+      width: 248,
+      height: 160,
+    },
+  );
+  assert.equal(
+    previewLayout({
+      cols: 13,
+      rows: 5,
+      gapRatio: 0.58,
+      availableWidth: 280,
+      actualSize: true,
+    }).width,
+    556,
+  );
+});
+
+test('preview scale consistently resizes actual and fitted previews', () => {
+  assert.deepEqual(
+    previewLayout({
+      cols: 2,
+      rows: 2,
+      gapRatio: 0.5,
+      availableWidth: 280,
+      actualSize: true,
+      scale: 2,
+    }),
+    {
+      tileSize: 56,
+      gap: 28,
+      width: 140,
+      height: 140,
+    },
+  );
+  assert.deepEqual(
+    previewLayout({
+      cols: 2,
+      rows: 2,
+      gapRatio: 0.5,
+      availableWidth: 280,
+      actualSize: false,
+      scale: 0.5,
+    }),
+    {
+      tileSize: 56,
+      gap: 28,
+      width: 140,
+      height: 140,
+    },
+  );
+});
+
+test('opens animated images lazily when ImageDecoder is available', async () => {
+  const originalDecoder = globalThis.ImageDecoder;
+  const originalDocument = globalThis.document;
+  const decodedIndexes = [];
+  class FakeImageDecoder {
+    static async isTypeSupported(type) {
+      return type === 'image/gif';
+    }
+
+    constructor() {
+      this.tracks = {
+        ready: Promise.resolve(),
+        selectedTrack: {
+          frameCount: 1798,
+          repetitionCount: 0,
+        },
+      };
+    }
+
+    async decode({ frameIndex }) {
+      decodedIndexes.push(frameIndex);
+      return {
+        image: {
+          displayWidth: 2,
+          displayHeight: 2,
+          duration: 100000,
+          close() {},
+        },
+      };
+    }
+
+    close() {}
+  }
+  globalThis.ImageDecoder = FakeImageDecoder;
+  globalThis.document = {
+    createElement() {
+      return {
+        width: 0,
+        height: 0,
+        getContext() {
+          return {
+            drawImage() {},
+            getImageData() {
+              return { data: new Uint8ClampedArray(16) };
+            },
+          };
+        },
+      };
+    },
+  };
+  try {
+    const file = {
+      type: 'image/gif',
+      arrayBuffer: async () =>
+        new TextEncoder().encode('GIF89a').buffer,
+    };
+    const animation = await openImageFrames(file);
+    assert.equal(animation.frameCount, 1798);
+    assert.equal(animation.lazy, true);
+    assert.deepEqual(decodedIndexes, [0]);
+    await animation.getFrame(20);
+    assert.deepEqual(decodedIndexes, [0, 20]);
+    animation.close();
+  } finally {
+    globalThis.ImageDecoder = originalDecoder;
+    globalThis.document = originalDocument;
+  }
+});
+
+test('downloads through a safe relative staging path and cleans it', async () => {
   const expected = Buffer.from('downloaded image bytes');
   let output;
-  const actual = await downloadMessageImage({
-    messageId: 'om_test',
-    imageKey: 'img_test',
-    profile: 'test-profile',
-    runLark: async (args) => {
-      output = args[args.indexOf('--output') + 1];
-      assert.equal(relative(tmpdir(), output).startsWith('..'), false);
-      assert.match(output, /lark-signature-buddy-download-[^/]+\/source-image\.png$/);
-      await writeFile(output, expected);
-      return { data: { saved_path: output } };
-    },
-  });
-  assert.deepEqual(actual, expected);
+  const workingDirectory = await mkdtemp(
+    join(tmpdir(), 'lark-signature-buddy-test-workspace-'),
+  );
+  try {
+    const stagingRoot = await prepareDownloadStaging(workingDirectory);
+    const actual = await downloadMessageImage({
+      messageId: 'om_test',
+      imageKey: 'img_test',
+      profile: 'test-profile',
+      workingDirectory,
+      runLark: async (args) => {
+        output = args[args.indexOf('--output') + 1];
+        assert.equal(isAbsolute(output), false);
+        assert.equal(output.includes('..'), false);
+        assert.match(
+          output,
+          /^\.lark-signature-buddy-downloads\/request-[^/]+\/source-image\.png$/,
+        );
+        const absoluteOutput = join(workingDirectory, output);
+        await mkdir(dirname(absoluteOutput), { recursive: true });
+        await writeFile(absoluteOutput, expected);
+        return { data: { saved_path: output } };
+      },
+    });
+    assert.deepEqual(actual, expected);
+    assert.deepEqual(await readdir(stagingRoot), []);
+  } finally {
+    await rm(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+test('cleans relative download staging after CLI failures', async () => {
+  const workingDirectory = await mkdtemp(
+    join(tmpdir(), 'lark-signature-buddy-test-workspace-'),
+  );
+  try {
+    const stagingRoot = await prepareDownloadStaging(workingDirectory);
+    await assert.rejects(
+      downloadMessageImage({
+        messageId: 'om_failure',
+        imageKey: 'img_failure',
+        profile: 'test-profile',
+        workingDirectory,
+        runLark: async (args) => {
+          const output = args[args.indexOf('--output') + 1];
+          assert.equal(isAbsolute(output), false);
+          throw new Error('download failed');
+        },
+      }),
+      /download failed/,
+    );
+    assert.deepEqual(await readdir(stagingRoot), []);
+  } finally {
+    await rm(workingDirectory, { recursive: true, force: true });
+  }
 });
 
 test('serial queue preserves per-context order without blocking other contexts', async () => {
@@ -241,35 +570,6 @@ test('serial queue preserves per-context order without blocking other contexts',
   assert.deepEqual(order, ['first:start', 'other', 'first:end', 'second']);
 });
 
-const bootstrapLayout = transportLayoutForSource(
-  80,
-  100,
-  qrSizeForModules(41),
-);
-const bootstrapRecipe = createSignatureRecipe({
-  sourceWidth: 80,
-  sourceHeight: 100,
-  sourceFrames: 1,
-  cols: 3,
-  rows: 2,
-  crop: { x: 0.1, y: 0.2, width: 0.75, height: 0.6 },
-  mode: 'precut',
-  gapRatio: 0.58,
-  colorMapping: true,
-  outputSize: 512,
-  contentRect: {
-    x: bootstrapLayout.sourceX / bootstrapLayout.canvasWidth,
-    y: bootstrapLayout.sourceY / bootstrapLayout.canvasHeight,
-    width: bootstrapLayout.sourceWidth / bootstrapLayout.canvasWidth,
-    height: bootstrapLayout.sourceHeight / bootstrapLayout.canvasHeight,
-  },
-});
-const compactQrSize = qrSizeForModules(
-  QRCode.create(encodeSignatureRecipe(bootstrapRecipe), {
-    errorCorrectionLevel: 'H',
-  }).modules.size,
-);
-const layout = transportLayoutForSource(80, 100, compactQrSize);
 const recipe = createSignatureRecipe({
   sourceWidth: 80,
   sourceHeight: 100,
@@ -281,12 +581,7 @@ const recipe = createSignatureRecipe({
   gapRatio: 0.58,
   colorMapping: true,
   outputSize: 512,
-  contentRect: {
-    x: layout.sourceX / layout.canvasWidth,
-    y: layout.sourceY / layout.canvasHeight,
-    width: layout.sourceWidth / layout.canvasWidth,
-    height: layout.sourceHeight / layout.canvasHeight,
-  },
+  contentRect: { x: 0, y: 0, width: 1, height: 1 },
 });
 
 test('round-trips the shared LSB1 signature recipe', () => {
@@ -297,6 +592,7 @@ test('round-trips the shared LSB1 signature recipe', () => {
   assert.equal(recipe.output.format, 'png');
   assert.equal(recipe.source.animated, false);
   assert.equal(recipe.colorMapping, true);
+  assert.equal(recipe.colorMappingGamma, 1);
 });
 
 test('strictly rejects recipe version mismatches and extra fields', () => {
@@ -332,26 +628,62 @@ test('strictly rejects recipe version mismatches and extra fields', () => {
   );
 });
 
-test('shared tile planner enforces bounds and animation workload', () => {
+test('decodes legacy LSB1 tokens with gamma 1.0', () => {
+  const legacy =
+    'LSB1:TFMBwQAAAQgAAACUBgQU1QAA13T-bhcKAAAAAP____8CAAEHBnujlNk';
+  assert.equal(decodeSignatureRecipe(legacy).colorMappingGamma, 1);
+});
+
+test('round-trips quantized mapping gamma in unused LSB1 flag bits', () => {
+  for (const gamma of [0, 0.8, 1, 3]) {
+    const value = { ...recipe, colorMappingGamma: gamma };
+    assert.equal(
+      decodeSignatureRecipe(encodeSignatureRecipe(value)).colorMappingGamma,
+      gamma,
+    );
+  }
+  assert.throws(
+    () => encodeSignatureRecipe({ ...recipe, colorMappingGamma: 0.85 }),
+    /步长必须为 0.1/,
+  );
+});
+
+test('shared tile planner enforces source bounds without a frame-tile cap', () => {
   assert.throws(
     () => buildTileSpecs(recipe, { width: 0, height: 149 }),
-    /传输图片尺寸无效/,
+    /原图片尺寸无效/,
   );
-  assert.throws(
-    () => buildTileSpecs(
-      {
-        ...recipe,
-        source: {
-          ...recipe.source,
-          animated: true,
-          frames: 120,
-        },
-        grid: { cols: 15, rows: 15 },
+  const specs = buildTileSpecs(
+    {
+      ...recipe,
+      source: {
+        ...recipe.source,
+        animated: true,
+        frames: 1798,
       },
-      { width: layout.canvasWidth, height: layout.canvasHeight },
-    ),
-    /动图处理量过大/,
+      grid: { cols: 13, rows: 5 },
+    },
+    { width: 80, height: 100 },
   );
+  assert.equal(specs.length, 65);
+});
+
+test('recipe supports animations beyond 120 frames', () => {
+  assert.doesNotThrow(() => validateAnimationWork(16, 16, 121));
+  const animated = createSignatureRecipe({
+    sourceWidth: 16,
+    sourceHeight: 16,
+    sourceFrames: 121,
+    cols: 1,
+    rows: 1,
+    crop: { x: 0, y: 0, width: 1, height: 1 },
+    mode: 'precut',
+    gapRatio: 0.58,
+    colorMapping: true,
+    outputSize: 512,
+    contentRect: { x: 0, y: 0, width: 1, height: 1 },
+  });
+  assert.equal(decodeSignatureRecipe(encodeSignatureRecipe(animated)).source.frames, 121);
 });
 
 test('formats a validated recipe receipt for one source image', () => {
@@ -369,81 +701,69 @@ test('formats a validated recipe receipt for one source image', () => {
 test('formats generated image keys and magic links in row-major order', () => {
   const keys = Array.from({ length: 6 }, (_, index) => `img_tile_${index + 1}`);
   const reply = formatGeneratedReply(keys, recipe);
-  assert.match(reply, /切图完成：3 × 2，共 6 张/);
-  assert.match(reply, /1\. img_tile_1/);
-  assert.match(
-    reply,
-    /https:\/\/magic\.solutionsuite\.cn\/r\?k=img_tile_1/,
+  const links = Array.from(
+    { length: 6 },
+    (_, index) =>
+      `https://magic.solutionsuite.cn/r?k=img_tile_${index + 1}${(index + 1) % 3 === 0 ? '&t2=A' : ''}`,
   );
-  assert.match(reply, /6\. img_tile_6/);
+  const previewLinks = [
+    links.slice(0, 3).join(' '),
+    links.slice(3, 6).join(' '),
+  ].join('\n');
+  const copyLinks = links.join(' ');
+  assert.match(reply, /切图完成：3 × 2，共 6 张/);
+  assert.equal(reply.includes(`${links[0]} ${links[1]}`), true);
+  assert.equal(reply.includes(`${links[0]}${links[1]}`), false);
+  assert.equal(
+    copyLinks.split(' ').every((link) => link.startsWith('https://')),
+    true,
+  );
+  assert.equal(reply.includes(`${links[2]}\n${links[3]}`), true);
+  const previewSection = reply.split('预览：\n')[1].split('\n\n复制：')[0];
+  const copySection = reply.split('```text\n')[1].split('\n```')[0];
+  assert.equal(previewSection, previewLinks);
+  assert.equal(copySection, copyLinks);
+  assert.equal(previewSection.split('\n').length, 2);
+  assert.equal(copySection.includes('\n'), false);
+  assert.match(reply, /\n```$/);
+  assert.doesNotMatch(reply, /k=img_tile_1&t2=A/);
+  assert.doesNotMatch(reply, /k=img_tile_2&t2=A/);
+  assert.match(reply, /k=img_tile_3&t2=A/);
+  assert.doesNotMatch(reply, /k=img_tile_4&t2=A/);
+  assert.doesNotMatch(reply, /k=img_tile_5&t2=A/);
+  assert.match(reply, /k=img_tile_6&t2=A/);
+  assert.equal(reply.match(/&t2=A/g)?.length, 4);
   assert.throws(
     () => formatGeneratedReply(keys.slice(0, 5), recipe),
     /期望 6 张，实际 5 张/,
   );
 });
 
-test('pads a narrow image and decodes its QR recipe end to end', async () => {
-  assert.deepEqual(layout, {
-    canvasWidth: 384,
-    canvasHeight: 149,
-    sourceX: 152,
-    sourceY: 0,
-    sourceWidth: 80,
-    sourceHeight: 100,
-    footerHeight: 49,
-    qrSize: 49,
-  });
-
-  const qr = await QRCode.toBuffer(encodeSignatureRecipe(recipe), {
-    type: 'png',
-    width: layout.qrSize,
-    margin: 4,
-    errorCorrectionLevel: 'H',
-  });
+test('validates and slices an original image with a separate recipe', async () => {
   const source = await sharp({
     create: {
-      width: layout.sourceWidth,
-      height: layout.sourceHeight,
+      width: 80,
+      height: 100,
       channels: 4,
       background: '#4f70d8',
     },
   })
     .png()
     .toBuffer();
-  const transport = await sharp({
-    create: {
-      width: layout.canvasWidth,
-      height: layout.canvasHeight,
-      channels: 4,
-      background: '#ffffff',
-    },
-  })
-    .composite([
-      { input: source, left: layout.sourceX, top: layout.sourceY },
-      {
-        input: qr,
-        left: Math.round((layout.canvasWidth - layout.qrSize) / 2),
-        top: layout.sourceHeight,
-      },
-    ])
-    .png()
-    .toBuffer();
-  const decoded = await decodeRecipeFromImage(transport);
-  assert.deepEqual(decoded.recipe, recipe);
-  assert.deepEqual(decoded.image, {
-    width: 384,
-    height: 149,
+  const image = await inspectSourceImage(source, recipe);
+  assert.deepEqual(image, {
+    width: 80,
+    height: 100,
     pages: 1,
     delay: [100],
     loop: 0,
     format: 'png',
   });
-  const transcoded = await sharp(transport).jpeg({ quality: 65 }).toBuffer();
-  const decodedAfterJpeg = await decodeRecipeFromImage(transcoded);
-  assert.deepEqual(decodedAfterJpeg.recipe, recipe);
-
-  const specs = buildTileSpecs(decoded.recipe, decoded.image);
+  const specs = buildTileSpecs(recipe, image);
   assert.equal(specs.length, 6);
+  assert.equal(specs[0].outputWidth, specs[0].width);
+  assert.equal(specs[0].outputHeight, specs[0].height);
+  assert.notEqual(specs[0].outputWidth, recipe.output.width);
   assert.deepEqual(
     specs.map(({ row, col }) => [row, col]),
     [
@@ -456,81 +776,89 @@ test('pads a narrow image and decodes its QR recipe end to end', async () => {
     ],
   );
   for (const spec of specs) {
-    assert.ok(spec.left >= layout.sourceX);
-    assert.ok(spec.top >= layout.sourceY);
-    assert.ok(spec.left + spec.width <= layout.sourceX + layout.sourceWidth);
-    assert.ok(spec.top + spec.height <= layout.sourceY + layout.sourceHeight);
+    assert.ok(spec.left >= 0);
+    assert.ok(spec.top >= 0);
+    assert.ok(spec.left + spec.width <= 80);
+    assert.ok(spec.top + spec.height <= 100);
   }
-  const firstTile = await renderTile(transport, specs[0]);
+  const firstTile = await renderTile(source, specs[0]);
   const firstMetadata = await sharp(firstTile).metadata();
-  assert.equal(firstMetadata.width, 512);
-  assert.equal(firstMetadata.height, 512);
+  assert.equal(firstMetadata.width, specs[0].width);
+  assert.equal(firstMetadata.height, specs[0].height);
+  await assert.rejects(
+    inspectSourceImage(
+      await sharp(source).resize(81, 100).png().toBuffer(),
+      recipe,
+    ),
+    /原图片尺寸不一致/,
+  );
+  await assert.rejects(
+    inspectSourceImage(source, {
+      ...recipe,
+      transport: {
+        contentRect: { x: 0.1, y: 0, width: 0.9, height: 1 },
+      },
+    }),
+    /不是原图直传格式/,
+  );
 });
 
 test('uploads rendered tiles concurrently while preserving result order', async () => {
   const source = await sharp({
     create: {
-      width: layout.canvasWidth,
-      height: layout.canvasHeight,
+      width: 80,
+      height: 100,
       channels: 4,
       background: '#ffffff',
     },
   })
     .png()
     .toBuffer();
-  const calls = [];
-  const keys = await generateAndUploadTiles({
-    input: source,
-    recipe,
-    transportImage: {
-      width: layout.canvasWidth,
-      height: layout.canvasHeight,
-      format: 'png',
-    },
-    profile: 'test-profile',
-    concurrency: 3,
-    runLark: async (args) => {
-      const fileArg = args[args.indexOf('--file') + 1];
-      const match = /tile-(\d+)\.png$/.exec(fileArg);
-      assert.ok(match);
-      const number = Number(match[1]);
-      calls.push(number);
-      await new Promise((resolve) => setTimeout(resolve, (7 - number) * 2));
-      return { data: { image_key: `img_generated_${number}` } };
-    },
-  });
-  assert.deepEqual(
-    keys,
-    Array.from({ length: 6 }, (_, index) => `img_generated_${index + 1}`),
+  const workingDirectory = await mkdtemp(
+    join(tmpdir(), 'lark-signature-buddy-test-workspace-'),
   );
-  assert.equal(calls.length, 6);
+  try {
+    const stagingRoot = await prepareUploadStaging(workingDirectory);
+    const calls = [];
+    const keys = await generateAndUploadTiles({
+      input: source,
+      recipe,
+      sourceImage: {
+        width: 80,
+        height: 100,
+        pages: 1,
+        format: 'png',
+      },
+      profile: 'test-profile',
+      concurrency: 3,
+      workingDirectory,
+      runLark: async (args) => {
+        const fileArg = args[args.indexOf('--file') + 1];
+        const uploadPath = fileArg.slice('image='.length);
+        assert.equal(isAbsolute(uploadPath), false);
+        assert.equal(uploadPath.includes('..'), false);
+        assert.match(
+          uploadPath,
+          /^\.lark-signature-buddy-uploads\/request-[^/]+\/tile-(\d+)\.png$/,
+        );
+        const number = Number(/tile-(\d+)\.png$/.exec(uploadPath)[1]);
+        calls.push(number);
+        await new Promise((resolve) => setTimeout(resolve, (7 - number) * 2));
+        return { data: { image_key: `img_generated_${number}` } };
+      },
+    });
+    assert.deepEqual(
+      keys,
+      Array.from({ length: 6 }, (_, index) => `img_generated_${index + 1}`),
+    );
+    assert.equal(calls.length, 6);
+    assert.deepEqual(await readdir(stagingRoot), []);
+  } finally {
+    await rm(workingDirectory, { recursive: true, force: true });
+  }
 });
 
 test('preserves animation frames, delays, loop, and alpha in APNG tiles', async () => {
-  const animatedBootstrapRecipe = createSignatureRecipe({
-    sourceWidth: 80,
-    sourceHeight: 100,
-    sourceFrames: 2,
-    cols: 2,
-    rows: 2,
-    crop: { x: 0.05, y: 0.05, width: 0.9, height: 0.9 },
-    mode: 'plain',
-    gapRatio: 0.58,
-    colorMapping: true,
-    outputSize: 512,
-    contentRect: {
-      x: bootstrapLayout.sourceX / bootstrapLayout.canvasWidth,
-      y: bootstrapLayout.sourceY / bootstrapLayout.canvasHeight,
-      width: bootstrapLayout.sourceWidth / bootstrapLayout.canvasWidth,
-      height: bootstrapLayout.sourceHeight / bootstrapLayout.canvasHeight,
-    },
-  });
-  const animatedQrSize = qrSizeForModules(
-    QRCode.create(encodeSignatureRecipe(animatedBootstrapRecipe), {
-      errorCorrectionLevel: 'H',
-    }).modules.size,
-  );
-  const animatedLayout = transportLayoutForSource(80, 100, animatedQrSize);
   const animatedRecipe = createSignatureRecipe({
     sourceWidth: 80,
     sourceHeight: 100,
@@ -542,22 +870,11 @@ test('preserves animation frames, delays, loop, and alpha in APNG tiles', async 
     gapRatio: 0.58,
     colorMapping: true,
     outputSize: 512,
-    contentRect: {
-      x: animatedLayout.sourceX / animatedLayout.canvasWidth,
-      y: animatedLayout.sourceY / animatedLayout.canvasHeight,
-      width: animatedLayout.sourceWidth / animatedLayout.canvasWidth,
-      height: animatedLayout.sourceHeight / animatedLayout.canvasHeight,
-    },
+    contentRect: { x: 0, y: 0, width: 1, height: 1 },
   });
   assert.equal(animatedRecipe.output.format, 'apng');
   assert.equal(animatedRecipe.source.animated, true);
-  const qr = await QRCode.toBuffer(encodeSignatureRecipe(animatedRecipe), {
-    type: 'png',
-    width: animatedLayout.qrSize,
-    margin: 4,
-    errorCorrectionLevel: 'H',
-  });
-  const transportFrames = [];
+  const sourceFrames = [];
   for (const [red, blue, alpha] of [[255, 0, 64], [0, 255, 192]]) {
     const source = Buffer.alloc(80 * 100 * 4);
     for (let index = 0; index < source.length; index += 4) {
@@ -565,64 +882,39 @@ test('preserves animation frames, delays, loop, and alpha in APNG tiles', async 
       source[index + 2] = blue;
       source[index + 3] = alpha;
     }
-    const canvas = await sharp({
-      create: {
-        width: animatedLayout.canvasWidth,
-        height: animatedLayout.canvasHeight,
-        channels: 4,
-        background: { r: 0, g: 0, b: 0, alpha: 0 },
-      },
-    })
-      .composite([
-        {
-          input: source,
-          raw: { width: 80, height: 100, channels: 4 },
-          left: animatedLayout.sourceX,
-          top: animatedLayout.sourceY,
-        },
-        {
-          input: qr,
-          left: Math.round(
-            (animatedLayout.canvasWidth - animatedLayout.qrSize) / 2,
-          ),
-          top: animatedLayout.sourceHeight,
-        },
-      ])
-      .raw()
-      .toBuffer();
-    transportFrames.push(new Uint8ClampedArray(
-      canvas.buffer,
-      canvas.byteOffset,
-      canvas.byteLength,
+    sourceFrames.push(new Uint8ClampedArray(
+      source.buffer,
+      source.byteOffset,
+      source.byteLength,
     ));
   }
-  const transportBlob = await encodeGifFrames({
-    width: animatedLayout.canvasWidth,
-    height: animatedLayout.canvasHeight,
+  const sourceBlob = await encodeGifFrames({
+    width: 80,
+    height: 100,
     frames: [
-      { data: transportFrames[0], delay: 100 },
-      { data: transportFrames[1], delay: 200 },
+      { data: sourceFrames[0], delay: 100 },
+      { data: sourceFrames[1], delay: 200 },
     ],
     loop: 0,
   });
-  const transport = Buffer.from(await transportBlob.arrayBuffer());
-  const decoded = await decodeRecipeFromImage(transport);
-  assert.deepEqual(decoded.recipe, animatedRecipe);
-  assert.equal(decoded.image.pages, 2);
-  assert.deepEqual(decoded.image.delay, [100, 200]);
-  assert.equal(decoded.image.loop, 0);
+  const sourceImage = Buffer.from(await sourceBlob.arrayBuffer());
+  const image = await inspectSourceImage(sourceImage, animatedRecipe);
+  assert.equal(image.pages, 2);
+  assert.deepEqual(image.delay, [100, 200]);
+  assert.equal(image.loop, 0);
 
   const tile = await renderTile(
-    transport,
-    buildTileSpecs(decoded.recipe, decoded.image)[0],
+    sourceImage,
+    buildTileSpecs(animatedRecipe, image)[0],
     {
-      ...decoded.image,
-      colorMapping: decoded.recipe.colorMapping,
+      ...image,
+      colorMapping: animatedRecipe.colorMapping,
     },
   );
+  const tileSpec = buildTileSpecs(animatedRecipe, image)[0];
   const decodedTile = await decodeImageBytes(tile, 'image/apng');
-  assert.equal(decodedTile.width, 512);
-  assert.equal(decodedTile.height, 512);
+  assert.equal(decodedTile.width, tileSpec.width);
+  assert.equal(decodedTile.height, tileSpec.height);
   assert.equal(decodedTile.frames.length, 2);
   assert.deepEqual(decodedTile.frames.map((frame) => frame.delay), [100, 200]);
   assert.equal(decodedTile.loop, 0);
@@ -662,6 +954,191 @@ test('browser APNG codec preserves RGBA, frame count, delays, and loop', async (
   assert.equal(decoded.frames[0].data[3], 128);
 });
 
+test('streaming APNG writer preserves frames, delays, loop, and alpha', async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'lark-signature-buddy-apng-test-'),
+  );
+  const path = join(directory, 'streamed.png');
+  const width = 4;
+  const height = 3;
+  const frames = [
+    {
+      data: new Uint8ClampedArray(width * height * 4).fill(0),
+      delay: 80,
+    },
+    {
+      data: new Uint8ClampedArray(width * height * 4).fill(0),
+      delay: 160,
+    },
+  ];
+  for (let index = 0; index < frames[0].data.length; index += 4) {
+    frames[0].data[index] = 255;
+    frames[0].data[index + 3] = 128;
+    frames[1].data[index + 2] = 255;
+    frames[1].data[index + 3] = 255;
+  }
+  try {
+    await writeApngFile({
+      path,
+      width,
+      height,
+      frameCount: frames.length,
+      loop: 2,
+      renderFrame: async (index) => frames[index],
+    });
+    const decoded = await decodeImageBytes(
+      await readFile(path),
+      'image/apng',
+    );
+    assert.equal(decoded.frames.length, 2);
+    assert.deepEqual(
+      decoded.frames.map((frame) => frame.delay),
+      [80, 160],
+    );
+    assert.equal(decoded.loop, 2);
+    assert.equal(decoded.frames[0].data[0], 255);
+    assert.equal(decoded.frames[0].data[3], 128);
+    assert.equal(decoded.frames[1].data[2], 255);
+    assert.equal(decoded.frames[1].data[3], 255);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('streaming APNG writer packs mapped frames as grayscale alpha', async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'lark-signature-buddy-apng-test-'),
+  );
+  const path = join(directory, 'grayscale-alpha.png');
+  const width = 4;
+  const height = 3;
+  const frames = Array.from({ length: 3 }, (_, frameIndex) => {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let index = 0; index < data.length; index += 4) {
+      const gray = frameIndex * 30 + index / 4;
+      data[index] = gray;
+      data[index + 1] = gray;
+      data[index + 2] = gray;
+      data[index + 3] = 200 - frameIndex * 20;
+    }
+    return { data, delay: 100 + frameIndex * 20 };
+  });
+  try {
+    await writeApngFile({
+      path,
+      width,
+      height,
+      frameCount: frames.length,
+      loop: 0,
+      grayscaleAlpha: true,
+      renderFrame: async (index) => frames[index],
+    });
+    const decoded = await decodeImageBytes(
+      await readFile(path),
+      'image/apng',
+    );
+    assert.equal(decoded.frames.length, 3);
+    for (let frameIndex = 0; frameIndex < frames.length; frameIndex += 1) {
+      assert.deepEqual(
+        decoded.frames[frameIndex].data,
+        frames[frameIndex].data,
+      );
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('streaming APNG writer stores mapped masks as indexed alpha', async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'lark-signature-buddy-apng-test-'),
+  );
+  const path = join(directory, 'indexed-alpha.png');
+  const width = 4;
+  const height = 3;
+  const frames = Array.from({ length: 3 }, (_, frameIndex) => {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let index = 0; index < data.length; index += 4) {
+      const alpha = frameIndex * 30 + index / 4;
+      data[index] = 255 - alpha;
+      data[index + 1] = 255 - alpha;
+      data[index + 2] = 255 - alpha;
+      data[index + 3] = alpha;
+    }
+    return { data, delay: 100 + frameIndex * 20 };
+  });
+  try {
+    await writeApngFile({
+      path,
+      width,
+      height,
+      frameCount: frames.length,
+      loop: 0,
+      indexedAlpha: true,
+      renderFrame: async (index) => frames[index],
+    });
+    const encoded = await readFile(path);
+    assert.equal(encoded.indexOf(Buffer.from('PLTE')), 37);
+    const decoded = await decodeImageBytes(encoded, 'image/apng');
+    assert.equal(decoded.frames.length, frames.length);
+    for (let frameIndex = 0; frameIndex < frames.length; frameIndex += 1) {
+      for (let index = 0; index < frames[frameIndex].data.length; index += 4) {
+        assert.equal(
+          decoded.frames[frameIndex].data[index + 3],
+          frames[frameIndex].data[index + 3],
+        );
+      }
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('indexed APNG masks can quantize alpha without changing frame timing', async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'lark-signature-buddy-apng-test-'),
+  );
+  const path = join(directory, 'quantized-alpha.png');
+  const frames = [
+    { data: new Uint8ClampedArray([80, 80, 80, 80]), delay: 80 },
+    { data: new Uint8ClampedArray([170, 170, 170, 170]), delay: 160 },
+  ];
+  try {
+    await writeApngFile({
+      path,
+      width: 1,
+      height: 1,
+      frameCount: frames.length,
+      indexedAlpha: true,
+      alphaLevels: 8,
+      renderFrame: async (index) => frames[index],
+    });
+    const decoded = await decodeImageBytes(await readFile(path), 'image/apng');
+    assert.deepEqual(
+      decoded.frames.map((frame) => frame.delay),
+      [80, 160],
+    );
+    assert.deepEqual(
+      decoded.frames.map((frame) => frame.data[3]),
+      [73, 182],
+    );
+    await assert.rejects(
+      writeApngFile({
+        path,
+        width: 1,
+        height: 1,
+        frameCount: 1,
+        indexedAlpha: true,
+        alphaLevels: 1,
+        renderFrame: async () => frames[0],
+      }),
+      /alpha 色阶/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('browser APNG decoder preserves all frames and delays', async () => {
   const bytes = await readFile('./tests/fixtures/animated-apng.png');
   const decoded = await decodeImageBytes(bytes, 'image/apng');
@@ -691,9 +1168,7 @@ test('browser APNG frames can be normalized into a multi-frame APNG', async () =
   assert.equal(apng.loop, 0);
 });
 
-test('rejects transport canvases beyond the resource limits', () => {
-  assert.throws(() => transportLayoutForSource(8192, 8192, 147), /32 MP/);
-  assert.throws(() => transportLayoutForSource(9000, 10, 147), /8192 px/);
+test('rejects source images beyond the resource limits', () => {
   assert.throws(() => validateStaticImageSize(8192, 8192), /32 MP/);
   assert.throws(() => validateStaticImageSize(9000, 10), /8192 px/);
 });

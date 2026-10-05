@@ -1,6 +1,17 @@
-import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import {
+  mkdir,
+  mkdtemp,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
+import {
+  isAbsolute,
+  join,
+  relative,
+} from 'node:path';
+import process from 'node:process';
 
 import sharp from 'sharp';
 
@@ -8,55 +19,81 @@ import {
   decodeImageBytes,
   encodeApngBytes,
 } from '@lark-signature-buddy/core/animation';
-import { mapToLuminanceAlpha } from '@lark-signature-buddy/core/color-mapping';
+import { preprocessLarkSignature } from '@lark-signature-buddy/core/color-mapping';
 import { buildTileSpecs } from '@lark-signature-buddy/core/tiles';
+import { writeApngFile } from './apng-stream.js';
 
 const DEFAULT_CONCURRENCY = 4;
+const UPLOAD_STAGING_NAME = '.lark-signature-buddy-uploads';
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 export { buildTileSpecs };
+
+function uploadStagingRoot(workingDirectory = process.cwd()) {
+  return join(workingDirectory, UPLOAD_STAGING_NAME);
+}
+
+export async function prepareUploadStaging(
+  workingDirectory = process.cwd(),
+) {
+  const root = uploadStagingRoot(workingDirectory);
+  await rm(root, { recursive: true, force: true });
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  return root;
+}
+
+async function renderAnimationFrame(
+  frame,
+  decoded,
+  spec,
+  colorMapping,
+  colorMappingGamma,
+) {
+  const data = await sharp(Buffer.from(frame.data), {
+    raw: {
+      width: decoded.width,
+      height: decoded.height,
+      channels: 4,
+    },
+    failOn: 'warning',
+  })
+    .extract({
+      left: spec.left,
+      top: spec.top,
+      width: spec.width,
+      height: spec.height,
+    })
+    .raw()
+    .toBuffer();
+  const rgba = new Uint8ClampedArray(
+    data.buffer,
+    data.byteOffset,
+    data.byteLength,
+  );
+  return {
+    data: colorMapping
+      ? preprocessLarkSignature(rgba, undefined, colorMappingGamma)
+      : rgba,
+    delay: frame.delay,
+  };
+}
 
 export async function renderTile(input, spec, animation = {}) {
   if (animation.pages > 1) {
-    if (animation.format !== 'gif') {
-      throw new Error('动图传输只支持 GIF');
-    }
     const decoded = animation.frames
       ? animation
-      : await decodeImageBytes(input, 'image/apng');
-    const frames = await Promise.all(
-      decoded.frames.map(async (frame) => {
-        const data = await sharp(Buffer.from(frame.data), {
-          raw: {
-            width: decoded.width,
-            height: decoded.height,
-            channels: 4,
-          },
-          failOn: 'warning',
-        })
-          .extract({
-            left: spec.left,
-            top: spec.top,
-            width: spec.width,
-            height: spec.height,
-          })
-          .resize(spec.outputWidth, spec.outputHeight, {
-            fit: 'fill',
-            kernel: sharp.kernel.lanczos3,
-          })
-          .raw()
-          .toBuffer();
-        const rgba = new Uint8ClampedArray(
-          data.buffer,
-          data.byteOffset,
-          data.byteLength,
-        );
-        return {
-          data: animation.colorMapping
-            ? mapToLuminanceAlpha(rgba)
-            : rgba,
-          delay: frame.delay,
-        };
-      }),
-    );
+      : await decodeImageBytes(input, `image/${animation.format}`);
+    const frames = [];
+    for (const frame of decoded.frames) {
+      frames.push(
+        await renderAnimationFrame(
+          frame,
+          decoded,
+          spec,
+          animation.colorMapping,
+          animation.colorMappingGamma,
+        ),
+      );
+    }
     return Buffer.from(encodeApngBytes({
       width: spec.outputWidth,
       height: spec.outputHeight,
@@ -73,17 +110,17 @@ export async function renderTile(input, spec, animation = {}) {
       top: spec.top,
       width: spec.width,
       height: spec.height,
-    })
-    .resize(spec.outputWidth, spec.outputHeight, {
-      fit: 'fill',
-      kernel: sharp.kernel.lanczos3,
     });
   if (animation.colorMapping) {
     const { data } = await pipeline
       .ensureAlpha()
       .raw()
       .toBuffer({ resolveWithObject: true });
-    return sharp(Buffer.from(mapToLuminanceAlpha(data)), {
+    return sharp(Buffer.from(preprocessLarkSignature(
+      data,
+      undefined,
+      animation.colorMappingGamma,
+    )), {
       raw: {
         width: spec.outputWidth,
         height: spec.outputHeight,
@@ -108,25 +145,30 @@ function imageKeyFromResponse(response) {
 export async function generateAndUploadTiles({
   input,
   recipe,
-  transportImage,
+  sourceImage,
   profile,
   runLark,
   concurrency = DEFAULT_CONCURRENCY,
+  workingDirectory = process.cwd(),
 }) {
-  const specs = buildTileSpecs(recipe, transportImage);
-  const renderAnimation = transportImage.pages > 1
+  const specs = buildTileSpecs(recipe, sourceImage);
+  const renderAnimation = sourceImage.pages > 1
     ? {
-      ...transportImage,
-      ...(await decodeImageBytes(input, 'image/gif')),
+      ...sourceImage,
+      ...(sourceImage.frames
+        ? {}
+        : await decodeImageBytes(input, `image/${sourceImage.format}`)),
       colorMapping: recipe.colorMapping,
+      colorMappingGamma: recipe.colorMappingGamma,
     }
     : {
-      ...transportImage,
+      ...sourceImage,
       colorMapping: recipe.colorMapping,
+      colorMappingGamma: recipe.colorMappingGamma,
     };
-  const directory = await mkdtemp(
-    join(tmpdir(), 'lark-signature-buddy-tiles-'),
-  );
+  const stagingRoot = uploadStagingRoot(workingDirectory);
+  await mkdir(stagingRoot, { recursive: true, mode: 0o700 });
+  const directory = await mkdtemp(join(stagingRoot, 'request-'));
   const imageKeys = new Array(specs.length);
   let cursor = 0;
   let failure = null;
@@ -144,13 +186,47 @@ export async function generateAndUploadTiles({
         `tile-${String(current + 1).padStart(3, '0')}.${extension}`,
       );
       try {
-        const buffer = await renderTile(input, spec, renderAnimation);
-        if (buffer.length > 10 * 1024 * 1024) {
+        if (renderAnimation.pages > 1) {
+          await writeApngFile({
+            path,
+            width: spec.outputWidth,
+            height: spec.outputHeight,
+            frameCount: renderAnimation.frames.length,
+            loop: renderAnimation.loop,
+            indexedAlpha:
+              renderAnimation.colorMapping &&
+              renderAnimation.format === 'gif',
+            grayscaleAlpha:
+              renderAnimation.colorMapping &&
+              renderAnimation.format !== 'gif',
+            gamma: renderAnimation.colorMappingGamma,
+            renderFrame: (index) =>
+              renderAnimationFrame(
+                renderAnimation.frames[index],
+                renderAnimation,
+                spec,
+                renderAnimation.colorMapping,
+                renderAnimation.colorMappingGamma,
+              ),
+          });
+        } else {
+          const buffer = await renderTile(input, spec, renderAnimation);
+          await writeFile(path, buffer, { mode: 0o600 });
+        }
+        const { size } = await stat(path);
+        if (size > MAX_UPLOAD_BYTES) {
           throw new Error(
-            `第 ${current + 1} 张 ${extension.toUpperCase()} 超过飞书 10 MB 上传上限`,
+            `第 ${current + 1} 张 ${extension.toUpperCase()} 为 ${(size / 1024 / 1024).toFixed(2)} MiB，超过飞书 10 MiB 上传上限`,
           );
         }
-        await writeFile(path, buffer, { mode: 0o600 });
+        const relativePath = relative(workingDirectory, path);
+        if (
+          isAbsolute(relativePath) ||
+          relativePath === '..' ||
+          relativePath.startsWith('../')
+        ) {
+          throw new Error('上传 staging 路径必须位于运行目录内');
+        }
         const response = await runLark([
           'im',
           'images',
@@ -162,7 +238,7 @@ export async function generateAndUploadTiles({
           '--data',
           '{"image_type":"message"}',
           '--file',
-          `image=${path}`,
+          `image=${relativePath}`,
           '--json',
         ]);
         imageKeys[current] = imageKeyFromResponse(response);
@@ -176,9 +252,12 @@ export async function generateAndUploadTiles({
   }
 
   try {
+    const requestedConcurrency = renderAnimation.pages > 1
+      ? 1
+      : Math.floor(concurrency) || DEFAULT_CONCURRENCY;
     const workerCount = Math.max(
       1,
-      Math.min(specs.length, Math.floor(concurrency) || DEFAULT_CONCURRENCY),
+      Math.min(specs.length, requestedConcurrency),
     );
     await Promise.all(Array.from({ length: workerCount }, () => worker()));
     if (failure) {

@@ -3,36 +3,48 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import process from 'node:process';
 
+import { decodeSignatureRecipe } from '@lark-signature-buddy/core/recipe';
+
 import {
   eventBatchKey,
   extractImageKeys,
+  extractRecipeTokens,
   formatGeneratedReply,
 } from './messages.js';
 import {
-  decodeRecipeFromImage,
   downloadMessageImage,
+  inspectSourceImage,
+  prepareDownloadStaging,
 } from './image.js';
+import { mergeRequestState } from './request-state.js';
 import { SerialQueue } from './serial-queue.js';
-import { generateAndUploadTiles } from './tiles.js';
+import {
+  generateAndUploadTiles,
+  prepareUploadStaging,
+} from './tiles.js';
 
 const PROFILE =
   process.env.LARK_SIGNATURE_BUDDY_PROFILE || 'lark-signature-buddy';
-const DEBOUNCE_MS = Number.parseInt(
-  process.env.LARK_SIGNATURE_BUDDY_BATCH_DELAY_MS || '1500',
-  10,
-);
-const MAX_BATCH_MS = Number.parseInt(
-  process.env.LARK_SIGNATURE_BUDDY_MAX_BATCH_MS || '5000',
-  10,
-);
 const DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
-const batches = new Map();
+const REQUEST_TTL_MS = Number.parseInt(
+  process.env.LARK_SIGNATURE_BUDDY_REQUEST_TTL_MS || '600000',
+  10,
+);
+const requestStates = new Map();
 const seenMessages = new Map();
+const eventQueue = new SerialQueue();
 const processingQueue = new SerialQueue();
 let shuttingDown = false;
 
+await Promise.all([
+  prepareDownloadStaging(),
+  prepareUploadStaging(),
+]);
+
 function log(level, message, detail = {}) {
-  process.stderr.write(`${JSON.stringify({ time: new Date().toISOString(), level, message, ...detail })}\n`);
+  process.stderr.write(
+    `${JSON.stringify({ time: new Date().toISOString(), level, message, ...detail })}\n`,
+  );
 }
 
 function runLark(args) {
@@ -66,16 +78,46 @@ function runLark(args) {
   });
 }
 
-function idempotencyKey(messageIds) {
-  return `lsb_${createHash('sha256').update(messageIds.join(',')).digest('hex').slice(0, 32)}`;
+function idempotencyKey(messageId, phase) {
+  const digest = createHash('sha256')
+    .update(`${messageId}:${phase}`)
+    .digest('hex')
+    .slice(0, 32);
+  return `lsb_${digest}`;
 }
 
-function userFacingDecodeError(error) {
+async function reply(messageId, text, phase, format = 'text') {
+  try {
+    await runLark([
+      'im',
+      '+messages-reply',
+      '--profile',
+      PROFILE,
+      '--as',
+      'bot',
+      '--message-id',
+      messageId,
+      format === 'markdown' ? '--markdown' : '--text',
+      text,
+      '--idempotency-key',
+      idempotencyKey(messageId, phase),
+      '--json',
+    ]);
+  } catch (error) {
+    log('error', 'failed to reply', {
+      messageId,
+      phase,
+      error: error.message,
+    });
+  }
+}
+
+function userFacingError(error) {
   if (
     error.message.includes('99991672') ||
     error.message.includes('im:message:readonly')
   ) {
-    return '图片仔应用缺少 im:message:readonly 权限，暂时无法下载图片进行扫码。';
+    return '图片仔应用缺少 im:message:readonly 权限，暂时无法下载图片。';
   }
   if (
     error.message.includes('im:resource') ||
@@ -86,117 +128,95 @@ function userFacingDecodeError(error) {
   return error.message;
 }
 
-async function processBatch(batch) {
-  const keys = [...new Set(batch.imageKeys)];
-  let text;
-  if (batch.errors.length > 0) {
-    text = `切图请求读取失败：${batch.errors[0]}`;
-  } else if (batch.images.length !== 1) {
-    text = `切图请求无效：期望 1 张传输图，收到 ${batch.images.length} 张。`;
-  } else {
-    const image = batch.images[0];
-    try {
-      const input = await downloadMessageImage({
-        messageId: image.messageId,
-        imageKey: image.imageKey,
-        profile: PROFILE,
-        runLark,
-      });
-      const decoded = await decodeRecipeFromImage(input);
-      log('info', 'decoded signature recipe', {
-        messageId: image.messageId,
-        imageKey: image.imageKey,
-        transportWidth: decoded.image.width,
-        transportHeight: decoded.image.height,
-        tokenLength: decoded.token.length,
-        cols: decoded.recipe.grid.cols,
-        rows: decoded.recipe.grid.rows,
-      });
-      const generatedKeys = await generateAndUploadTiles({
-        input,
-        recipe: decoded.recipe,
-        transportImage: decoded.image,
-        profile: PROFILE,
-        runLark,
-      });
-      log('info', 'generated and uploaded signature tiles', {
-        messageId: image.messageId,
-        sourceImageKey: image.imageKey,
-        imageCount: generatedKeys.length,
-      });
-      text = formatGeneratedReply(generatedKeys, decoded.recipe);
-    } catch (error) {
-      log('warn', 'failed to process signature recipe', {
-        messageId: image.messageId,
-        imageKey: image.imageKey,
-        error: error.message,
-      });
-      text = `切图请求读取失败：${userFacingDecodeError(error)}`;
-    }
-  }
+async function processRequest(request, replyMessageId) {
   try {
-    await runLark([
-      'im',
-      '+messages-reply',
-      '--profile',
-      PROFILE,
-      '--as',
-      'bot',
-      '--message-id',
-      batch.replyMessageId,
-      '--text',
-      text,
-      '--idempotency-key',
-      idempotencyKey(batch.messageIds),
-      '--json',
-    ]);
-    log('info', 'replied with image keys', {
-      messageId: batch.replyMessageId,
-      imageCount: keys.length,
+    const recipe = decodeSignatureRecipe(request.recipeToken);
+    const input = await downloadMessageImage({
+      messageId: request.image.messageId,
+      imageKey: request.image.imageKey,
+      profile: PROFILE,
+      runLark,
     });
+    const sourceImage = await inspectSourceImage(input, recipe);
+    log('info', 'validated source image and recipe', {
+      messageId: request.image.messageId,
+      imageKey: request.image.imageKey,
+      width: sourceImage.width,
+      height: sourceImage.height,
+      frames: sourceImage.pages,
+      cols: recipe.grid.cols,
+      rows: recipe.grid.rows,
+    });
+    const generatedKeys = await generateAndUploadTiles({
+      input,
+      recipe,
+      sourceImage,
+      profile: PROFILE,
+      runLark,
+    });
+    await reply(
+      replyMessageId,
+      formatGeneratedReply(generatedKeys, recipe),
+      'result',
+      'markdown',
+    );
   } catch (error) {
-    log('error', 'failed to reply with image keys', {
-      messageId: batch.replyMessageId,
+    log('warn', 'failed to process source image and recipe', {
+      messageId: replyMessageId,
       error: error.message,
     });
+    await reply(
+      replyMessageId,
+      `切图处理失败：${userFacingError(error)}`,
+      'result',
+    );
   }
 }
 
-function replyToBatch(batchKey) {
-  const batch = batches.get(batchKey);
-  if (!batch) return Promise.resolve();
-  clearTimeout(batch.timer);
-  batches.delete(batchKey);
-  return processingQueue.run(batchKey, () => processBatch(batch));
+function activeState(key, now) {
+  const state = requestStates.get(key);
+  if (!state) return {};
+  if (now - state.updatedAt > REQUEST_TTL_MS) {
+    requestStates.delete(key);
+    return {};
+  }
+  return state;
 }
 
-function scheduleBatch(event, { imageKeys = [], error = null }) {
+async function handleEvent(event) {
+  if (shuttingDown) return;
+  if (!event || event.type !== 'im.message.receive_v1') return;
+  if (event.sender_type === 'bot') return;
+  if (!event.message_id || seenMessages.has(event.message_id)) return;
+  seenMessages.set(event.message_id, Date.now());
+  if (seenMessages.size > 5000) cleanupSeen();
+
   const key = eventBatchKey(event);
-  const now = Date.now();
-  const existing = batches.get(key);
-  const batch = existing || {
-    imageKeys: [],
-    images: [],
-    errors: [],
-    messageIds: [],
-    replyMessageId: event.message_id,
-    firstAt: now,
-    timer: null,
-  };
-  batch.imageKeys.push(...imageKeys);
-  batch.images.push(
-    ...imageKeys.map((imageKey) => ({
-      imageKey,
+  await eventQueue.run(key, async () => {
+    const now = Date.now();
+    const transition = mergeRequestState(activeState(key, now), {
+      imageKeys: extractImageKeys(event.content),
+      recipeTokens: extractRecipeTokens(event.content),
       messageId: event.message_id,
-    })),
-  );
-  if (error) batch.errors.push(error);
-  batch.messageIds.push(event.message_id);
-  batch.replyMessageId = event.message_id;
-  if (batch.timer) clearTimeout(batch.timer);
-  const remaining = Math.max(0, MAX_BATCH_MS - (now - batch.firstAt));
-  batch.timer = setTimeout(() => replyToBatch(key), Math.min(DEBOUNCE_MS, remaining));
-  batches.set(key, batch);
+      now,
+    });
+    if (transition.state) {
+      requestStates.set(key, transition.state);
+    } else if (transition.status === 'ready') {
+      requestStates.delete(key);
+    }
+    await reply(
+      event.message_id,
+      transition.message,
+      transition.status,
+    );
+    if (transition.status === 'ready') {
+      void processingQueue.run(
+        key,
+        () => processRequest(transition.request, event.message_id),
+      );
+    }
+  });
 }
 
 function cleanupSeen() {
@@ -204,18 +224,6 @@ function cleanupSeen() {
   for (const [messageId, seenAt] of seenMessages) {
     if (seenAt < cutoff) seenMessages.delete(messageId);
   }
-}
-
-function handleEvent(event) {
-  if (shuttingDown) return;
-  if (!event || event.type !== 'im.message.receive_v1') return;
-  if (event.sender_type === 'bot') return;
-  if (!event.message_id || seenMessages.has(event.message_id)) return;
-  seenMessages.set(event.message_id, Date.now());
-  if (seenMessages.size > 5000) cleanupSeen();
-  const imageKeys = extractImageKeys(event.content);
-  if (imageKeys.length === 0) return;
-  scheduleBatch(event, { imageKeys });
 }
 
 const consumer = spawn(
@@ -241,7 +249,9 @@ const consumer = spawn(
 
 createInterface({ input: consumer.stdout }).on('line', (line) => {
   try {
-    handleEvent(JSON.parse(line));
+    void handleEvent(JSON.parse(line)).catch((error) => {
+      log('error', 'failed to handle event', { error: error.message });
+    });
   } catch (error) {
     log('warn', 'ignored malformed event line', { error: error.message });
   }
@@ -267,9 +277,8 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   log('info', 'stopping lark signature buddy bot', { signal });
-  const pending = [...batches.keys()].map((key) => replyToBatch(key));
   consumer.kill('SIGTERM');
-  await Promise.allSettled(pending);
+  await eventQueue.drain();
   await processingQueue.drain();
   process.exitCode = 0;
 }
