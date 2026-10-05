@@ -9,28 +9,12 @@
   </head>
   <body>
     <main class="shell">
-      <header class="topbar">
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
-          <div>
-            <p class="eyebrow">LARK SIGNATURE BUDDY</p>
-            <h1>飞书签名图片切图</h1>
-            <p class="intro">同屏调整选区、网格和间隔预裁剪；动图以 GIF 传输，切片输出 APNG。</p>
-          </div>
-        </div>
-        <button class="upload-button" id="upload-button" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v3.2A2.8 2.8 0 0 0 7.8 20h8.4a2.8 2.8 0 0 0 2.8-2.8V14" />
-          </svg>
-          <span id="upload-button-label">上传图片</span>
-        </button>
-        <input
-          id="file-input"
-          type="file"
-          accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.ico,.tif,.tiff,.heic,image/*"
-          hidden
-        />
-      </header>
+      <input
+        id="file-input"
+        type="file"
+        accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.ico,.tif,.tiff,.heic,image/*"
+        hidden
+      />
 
       <section class="editor-layout">
         <div class="canvas-panel">
@@ -45,16 +29,31 @@
 
           <div class="canvas-stage" id="canvas-stage" hidden>
             <canvas id="editor-canvas"></canvas>
-            <div class="canvas-tip">拖动网格定位 · 拖动四角等比缩放</div>
           </div>
 
-          <div class="file-bar">
-            <div>
-              <strong id="file-name">尚未选择图片</strong>
-              <span id="file-detail">上传入口会始终保留在右上角</span>
+          <div class="file-bar" id="file-bar" hidden>
+            <span id="file-detail"></span>
+            <div class="file-actions">
+              <button class="text-button" id="reset-grid" type="button">重置网格</button>
+              <button class="text-button" id="upload-button" type="button">换一张</button>
             </div>
-            <button class="text-button" id="reset-grid" type="button" disabled>重置网格</button>
           </div>
+
+          <section class="frame-section" id="frame-section" hidden>
+            <div class="section-heading">
+              <div>
+                <p class="step-label">动图帧</p>
+                <h2>选择裁剪参考帧</h2>
+              </div>
+              <span class="frame-count" id="frame-count"></span>
+            </div>
+            <div
+              class="frame-picker"
+              id="frame-picker"
+              role="listbox"
+              aria-label="动图帧"
+            ></div>
+          </section>
         </div>
 
         <aside class="control-panel">
@@ -69,90 +68,87 @@
             <div class="grid-inputs">
               <label>
                 <span>列数</span>
-                <input id="grid-cols" type="number" min="1" max="15" value="2" inputmode="numeric" />
+                <input id="grid-cols" type="number" min="1" max="13" value="2" inputmode="numeric" />
               </label>
               <span class="grid-times" aria-hidden="true">×</span>
               <label>
                 <span>行数</span>
-                <input id="grid-rows" type="number" min="1" max="15" value="2" inputmode="numeric" />
+                <input id="grid-rows" type="number" min="1" max="5" value="2" inputmode="numeric" />
               </label>
             </div>
-            <p class="field-hint">每项可输入 1–15，最多一次复制 225 张。</p>
           </section>
 
-          <section class="control-section frame-section" id="frame-section" hidden>
-            <div class="section-heading">
-              <div>
-                <p class="step-label">动图帧</p>
-                <h2>选择裁剪参考帧</h2>
-              </div>
-              <span class="frame-count" id="frame-count"></span>
-            </div>
-            <p class="field-hint">点击任一帧切换左侧画面；裁剪范围会应用到全部帧。</p>
-            <div
-              class="frame-picker"
-              id="frame-picker"
-              role="listbox"
-              aria-label="动图帧"
-            ></div>
-          </section>
-
-          <section class="control-section">
-            <div class="mapping-control">
-              <div>
-                <p class="step-label">色彩映射</p>
-                <strong>适配链接预览色彩空间</strong>
-                <small>将 RGB 映射为明度与透明度，默认应用到最终传输图</small>
-              </div>
-              <label class="switch-control">
-                <input id="color-mapping" type="checkbox" checked />
-                <span aria-hidden="true"></span>
-                <em>开启</em>
-              </label>
-            </div>
-            <p class="mapping-warning" id="mapping-warning" hidden>
-              中间 GIF 保留原始色彩；Buddy Bot 切片时执行映射并输出 8-bit 半透明 APNG。
-            </p>
-          </section>
-
-          <section class="control-section">
-            <p class="step-label">模式</p>
-            <div class="mode-options" id="mode-options">
-              <label class="mode-card">
-                <input type="radio" name="mode" value="plain" checked />
-                <span>
-                  <strong>无间隔</strong>
-                  <small>连续切分，不为展示缝隙额外裁掉内容</small>
-                </span>
-              </label>
-              <label class="mode-card">
-                <input type="radio" name="mode" value="precut" />
-                <span>
-                  <strong>预裁剪间隔</strong>
-                  <small>预先裁掉网格缝隙，最终组合更接近原图</small>
-                </span>
-              </label>
-            </div>
-            <div class="gap-control" id="gap-control">
+          <section class="control-section gap-settings">
+            <div class="gap-control">
               <div class="range-heading">
-                <label for="gap-ratio">实际渲染间隔 / 子图边长</label>
-                <output id="gap-output">58%</output>
+                <label for="precut-gap-ratio">预裁剪间隔 / 子图边长</label>
+                <output id="precut-gap-output">58%</output>
               </div>
-              <input id="gap-ratio" type="range" min="0" max="100" value="58" />
-              <p>最终组合预览始终显示该间隔；预裁剪模式还会按它跳过对应原图区域。</p>
+              <input id="precut-gap-ratio" type="range" min="0" max="100" value="58" />
             </div>
           </section>
+
+          <details class="advanced-settings">
+            <summary>高级设置</summary>
+            <div class="advanced-settings-body">
+              <section class="control-section">
+                <div class="mapping-control">
+                  <div>
+                    <p class="step-label">色彩映射</p>
+                    <strong>适配飞书签名单色遮罩</strong>
+                  </div>
+                  <label class="switch-control">
+                    <input id="color-mapping" type="checkbox" checked />
+                    <span aria-hidden="true"></span>
+                    <em>开启</em>
+                  </label>
+                </div>
+                <div class="gap-control mapping-gamma-control">
+                  <div class="range-heading">
+                    <label for="mapping-gamma">映射 Gamma</label>
+                    <output id="mapping-gamma-output">1.00</output>
+                  </div>
+                  <input id="mapping-gamma" type="range" min="0" max="300" step="10" value="100" />
+                </div>
+              </section>
+              <section class="control-section">
+                <div class="gap-control">
+                  <div class="range-heading">
+                    <label for="preview-gap-ratio">预览间隔 / 子图边长</label>
+                    <output id="preview-gap-output">58%</output>
+                  </div>
+                  <input id="preview-gap-ratio" type="range" min="0" max="100" value="58" />
+                </div>
+                <div class="gap-control preview-scale-control">
+                  <div class="range-heading">
+                    <label for="preview-scale">预览缩放</label>
+                    <output id="preview-scale-output">100%</output>
+                  </div>
+                  <input id="preview-scale" type="range" min="25" max="300" step="25" value="100" />
+                </div>
+              </section>
+            </div>
+          </details>
 
           <section class="control-section preview-section">
             <div class="section-heading compact">
-              <div>
-                <p class="step-label">预览</p>
-                <h2>最终组合效果</h2>
+              <p class="step-label">预览</p>
+              <div class="preview-controls">
+                <div class="preview-platform" role="group" aria-label="预览平台">
+                  <button class="active" data-platform="pc" type="button">PC</button>
+                  <button data-platform="mobile" type="button">Mobile</button>
+                </div>
+                <label class="preview-switch-control">
+                  <span>实际大小</span>
+                  <input id="preview-actual-size" type="checkbox" checked />
+                  <i aria-hidden="true"></i>
+                </label>
+                <label class="preview-switch-control">
+                  <span>遮罩</span>
+                  <input id="preview-mask" type="checkbox" checked />
+                  <i aria-hidden="true"></i>
+                </label>
               </div>
-              <span class="animation-badge" id="animation-badge" hidden>
-                <span aria-hidden="true"></span>
-                动图预览
-              </span>
             </div>
             <div class="output-preview" id="output-preview">
               <span>选择图片后显示</span>
@@ -161,28 +157,17 @@
 
           <div class="notice" id="notice" role="status" aria-live="polite"></div>
           <button class="generate-button" id="generate-button" type="button" disabled>
-            <span id="generate-label">选择图片后即可生成传输图片</span>
-            <span class="spinner" id="spinner" hidden aria-hidden="true"></span>
+            <span id="generate-label">选择图片后即可生成配置</span>
           </button>
-          <section class="transport-debug" id="transport-debug" hidden>
+          <section class="config-output" id="config-output" hidden>
             <div>
-              <strong>本次实际复制的传输图</strong>
-              <span id="transport-detail"></span>
+              <strong>配置字符串</strong>
+              <span id="config-detail"></span>
             </div>
-            <img
-              id="transport-preview"
-              alt="带紧凑二维码的传输图片"
-            />
-            <p>静态 PNG 可复制粘贴；动图请下载 GIF 后作为图片上传，右键复制会丢失动画帧。</p>
-            <a id="transport-download" download="lark-signature-transport">下载传输图片</a>
+            <textarea id="config-text" rows="3" readonly></textarea>
           </section>
         </aside>
       </section>
-
-      <footer>
-        <span class="status-dot"></span>
-        <span>动图以兼容飞书的 GIF 传输；Buddy Bot 按 QR 参数切片并输出 APNG。</span>
-      </footer>
     </main>
 
     <script type="module" src="./app.js"></script>

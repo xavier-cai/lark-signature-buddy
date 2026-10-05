@@ -18,6 +18,109 @@ function createCanvas(width, height) {
   return canvas;
 }
 
+function mimeTypeForKind(kind, fallback = '') {
+  if (kind.format === 'gif') return 'image/gif';
+  if (kind.format === 'apng') return 'image/png';
+  if (kind.format === 'webp') return 'image/webp';
+  return fallback;
+}
+
+function frameFromVideoFrame(image) {
+  const width = image.displayWidth || image.codedWidth || 0;
+  const height = image.displayHeight || image.codedHeight || 0;
+  const canvas = createCanvas(width, height);
+  const context = canvas.getContext('2d');
+  context.drawImage(image, 0, 0);
+  const data = context.getImageData(0, 0, width, height).data;
+  const delay = clampDelay((image.duration || 100000) / 1000);
+  image.close();
+  return { data, delay };
+}
+
+async function openWithImageDecoder(bytes, mimeType, cacheSize) {
+  const maximumCacheSize = Math.max(2, Math.floor(cacheSize) || 32);
+  const decoder = new ImageDecoder({ data: bytes, type: mimeType });
+  await decoder.tracks.ready;
+  const track = decoder.tracks.selectedTrack;
+  const frameCount = track?.frameCount || 1;
+  const firstResult = await decoder.decode({
+    frameIndex: 0,
+    completeFramesOnly: true,
+  });
+  const width =
+    firstResult.image.displayWidth || firstResult.image.codedWidth || 0;
+  const height =
+    firstResult.image.displayHeight || firstResult.image.codedHeight || 0;
+  validateStaticImageSize(width, height);
+  validateAnimationWork(width, height, frameCount);
+
+  const cache = new Map([[0, frameFromVideoFrame(firstResult.image)]]);
+  const pending = new Map();
+  let decodeTail = Promise.resolve();
+
+  function touch(index, frame) {
+    cache.delete(index);
+    cache.set(index, frame);
+    while (cache.size > maximumCacheSize) {
+      const oldest = cache.keys().next().value;
+      if (oldest === 0 && cache.size > 1) {
+        const first = cache.get(oldest);
+        cache.delete(oldest);
+        cache.set(oldest, first);
+        continue;
+      }
+      cache.delete(oldest);
+    }
+    return frame;
+  }
+
+  function getFrame(index) {
+    if (!Number.isInteger(index) || index < 0 || index >= frameCount) {
+      return Promise.reject(new Error(`动图帧索引无效：${index}`));
+    }
+    if (cache.has(index)) return Promise.resolve(touch(index, cache.get(index)));
+    if (pending.has(index)) return pending.get(index);
+    const request = decodeTail
+      .catch(() => {})
+      .then(async () => {
+        const result = await decoder.decode({
+          frameIndex: index,
+          completeFramesOnly: true,
+        });
+        return touch(index, frameFromVideoFrame(result.image));
+      })
+      .finally(() => pending.delete(index));
+    decodeTail = request;
+    pending.set(index, request);
+    return request;
+  }
+
+  return {
+    width,
+    height,
+    frameCount,
+    loop: track?.repetitionCount ?? 0,
+    lazy: true,
+    getFrame,
+    peekFrame: (index) => cache.get(index),
+    close: () => {
+      cache.clear();
+      decoder.close();
+    },
+  };
+}
+
+function wrapDecodedAnimation(animation) {
+  return {
+    ...animation,
+    frameCount: animation.frames.length,
+    lazy: false,
+    getFrame: async (index) => animation.frames[index],
+    peekFrame: (index) => animation.frames[index],
+    close: () => {},
+  };
+}
+
 async function decodeGifFrames(bytes) {
   const gif = decodeGif(bytes);
   validateStaticImageSize(gif.width, gif.height);
@@ -116,6 +219,31 @@ export async function decodeImageFrames(file) {
   const kind = detectImageKind(bytes);
   if (kind.animated) return decodeImageBytes(bytes, file.type);
   return decodeStaticImage(file);
+}
+
+export async function openImageFrames(file, { cacheSize = 32 } = {}) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const kind = detectImageKind(bytes);
+  if (!kind.animated) {
+    return wrapDecodedAnimation(await decodeStaticImage(file));
+  }
+  const mimeType = mimeTypeForKind(kind, file.type);
+  let supportsImageDecoder = Boolean(globalThis.ImageDecoder);
+  if (supportsImageDecoder && ImageDecoder.isTypeSupported) {
+    try {
+      supportsImageDecoder = await ImageDecoder.isTypeSupported(mimeType);
+    } catch {
+      supportsImageDecoder = false;
+    }
+  }
+  if (supportsImageDecoder) {
+    try {
+      return await openWithImageDecoder(bytes, mimeType, cacheSize);
+    } catch {
+      // Preserve support on browsers with partial ImageDecoder implementations.
+    }
+  }
+  return wrapDecodedAnimation(await decodeImageBytes(bytes, mimeType));
 }
 
 export async function encodeGifFrames({

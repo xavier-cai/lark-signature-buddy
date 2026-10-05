@@ -2,39 +2,44 @@ import {
   createSignatureRecipe,
   encodeSignatureRecipe,
 } from '@lark-signature-buddy/core/recipe';
-import QRCode from 'qrcode';
 import {
-  compositionUnits,
   fitCrop,
+  MAX_GRID_COLS,
+  MAX_GRID_ROWS,
   parseGrid,
   selectionAspect,
   tileRects,
 } from '@lark-signature-buddy/core/grid';
 import {
-  decodeImageFrames,
-  encodeGifFrames,
   frameToCanvas,
+  openImageFrames,
 } from '@lark-signature-buddy/core/animation';
-import { mapToLuminanceAlpha } from '@lark-signature-buddy/core/color-mapping';
 import {
-  QR_QUIET_ZONE_MODULES,
-  QR_MIN_MODULE_PIXELS,
-  qrSizeForModules,
-  transportLayoutForSource,
-} from '@lark-signature-buddy/core/transport';
+  DEFAULT_COLOR_MAPPING_GAMMA,
+  preprocessLarkSignature,
+  renderLarkMobile,
+  renderLarkPc,
+} from '@lark-signature-buddy/core/color-mapping';
+import {
+  FRAME_OPTION_GAP,
+  FRAME_OPTION_STEP,
+  FRAME_OPTION_WIDTH,
+  visibleFrameRange,
+} from './frame-window.js';
+import { previewLayout } from './preview-layout.js';
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const HANDLE_RADIUS = 9;
-const OUTPUT_SIZE = 512;
-
+// Kept in the V1 recipe for wire compatibility. The bot emits native-size
+// tiles so a small source crop is never enlarged before upload.
+const LEGACY_OUTPUT_SIZE = 512;
 const uploadButton = document.querySelector('#upload-button');
-const uploadButtonLabel = document.querySelector('#upload-button-label');
 const fileInput = document.querySelector('#file-input');
 const emptyStage = document.querySelector('#empty-stage');
 const canvasStage = document.querySelector('#canvas-stage');
 const editorCanvas = document.querySelector('#editor-canvas');
 const editorContext = editorCanvas.getContext('2d');
-const fileName = document.querySelector('#file-name');
+const fileBar = document.querySelector('#file-bar');
 const fileDetail = document.querySelector('#file-detail');
 const resetGridButton = document.querySelector('#reset-grid');
 const gridColsInput = document.querySelector('#grid-cols');
@@ -44,20 +49,24 @@ const frameSection = document.querySelector('#frame-section');
 const frameCount = document.querySelector('#frame-count');
 const framePicker = document.querySelector('#frame-picker');
 const colorMappingInput = document.querySelector('#color-mapping');
-const mappingWarning = document.querySelector('#mapping-warning');
-const modeOptions = document.querySelector('#mode-options');
-const gapRatioInput = document.querySelector('#gap-ratio');
-const gapOutput = document.querySelector('#gap-output');
+const mappingGammaInput = document.querySelector('#mapping-gamma');
+const mappingGammaOutput = document.querySelector('#mapping-gamma-output');
+const previewGapRatioInput = document.querySelector('#preview-gap-ratio');
+const previewGapOutput = document.querySelector('#preview-gap-output');
+const previewScaleInput = document.querySelector('#preview-scale');
+const previewScaleOutput = document.querySelector('#preview-scale-output');
+const precutGapRatioInput = document.querySelector('#precut-gap-ratio');
+const precutGapOutput = document.querySelector('#precut-gap-output');
 const outputPreview = document.querySelector('#output-preview');
-const animationBadge = document.querySelector('#animation-badge');
+const previewPlatform = document.querySelector('.preview-platform');
+const previewActualSizeInput = document.querySelector('#preview-actual-size');
+const previewMaskInput = document.querySelector('#preview-mask');
 const notice = document.querySelector('#notice');
 const generateButton = document.querySelector('#generate-button');
 const generateLabel = document.querySelector('#generate-label');
-const spinner = document.querySelector('#spinner');
-const transportDebug = document.querySelector('#transport-debug');
-const transportDetail = document.querySelector('#transport-detail');
-const transportPreview = document.querySelector('#transport-preview');
-const transportDownload = document.querySelector('#transport-download');
+const configOutput = document.querySelector('#config-output');
+const configDetail = document.querySelector('#config-detail');
+const configText = document.querySelector('#config-text');
 
 const state = {
   file: null,
@@ -65,30 +74,36 @@ const state = {
   imageUrl: null,
   animation: null,
   selectedFrame: 0,
+  selectedFrameData: null,
   frameCanvas: null,
   mappedFrameCanvas: null,
   mappedFrameData: null,
+  maskedFrameCanvas: null,
+  maskedFrameData: null,
+  preprocessedFrameData: null,
   previewTimer: null,
   previewGeneration: 0,
+  framePickerGeneration: 0,
+  framePickerRender: null,
+  uploadGeneration: 0,
   colorMapping: true,
+  colorMappingGamma: DEFAULT_COLOR_MAPPING_GAMMA,
+  previewActualSize: true,
+  previewMask: true,
+  previewPlatform: 'pc',
   grid: '2x2',
-  mode: 'plain',
-  gapRatio: 0.58,
+  previewGapRatio: 0.58,
+  previewScale: 1,
+  precutGapRatio: 0.58,
   crop: null,
   display: null,
   drag: null,
-  transportUrl: null,
 };
 
 function updateCopyLabel() {
-  if (!state.image) {
-    generateLabel.textContent = '选择图片后即可生成传输图片';
-    return;
-  }
-  const mappingLabel = state.colorMapping ? '色彩映射' : '原始色彩';
-  generateLabel.textContent = state.animation?.frames.length > 1
-    ? `生成并下载 GIF 动图（${mappingLabel}输出）`
-    : `生成并复制 ${mappingLabel} PNG 图片`;
+  generateLabel.textContent = state.image
+    ? '生成配置'
+    : '选择图片后即可生成配置';
 }
 
 function formatBytes(size) {
@@ -122,11 +137,11 @@ function currentGrid() {
 
 function currentAspect() {
   const { cols, rows } = currentGrid();
-  return selectionAspect(cols, rows, state.mode, state.gapRatio);
+  return selectionAspect(cols, rows, 'precut', state.precutGapRatio);
 }
 
 function isAnimated() {
-  return (state.animation?.frames.length || 0) > 1;
+  return (state.animation?.frameCount || 0) > 1;
 }
 
 function sourceWidth() {
@@ -137,26 +152,43 @@ function sourceHeight() {
   return state.animation?.height || state.image?.naturalHeight || 0;
 }
 
-function sourceForFrame(index = state.selectedFrame, mapped = false) {
+function sourceForFrame(index = state.selectedFrame, effect = 'original') {
   if (!state.animation) return state.image;
-  if (mapped && !state.mappedFrameData) {
-    state.mappedFrameData = new Uint8ClampedArray(
-      state.animation.frames[index].data.length,
+  const frame = index === state.selectedFrame
+    ? state.selectedFrameData
+    : state.animation.peekFrame(index);
+  if (!frame) return null;
+  const mapped = effect !== 'original';
+  const targetCanvasKey = mapped ? 'maskedFrameCanvas' : 'frameCanvas';
+  if (!state[targetCanvasKey]) {
+    state[targetCanvasKey] = document.createElement('canvas');
+    state[targetCanvasKey].width = state.animation.width;
+    state[targetCanvasKey].height = state.animation.height;
+  }
+  let frameData = frame.data;
+  if (mapped) {
+    if (!state.preprocessedFrameData) {
+      state.preprocessedFrameData = new Uint8ClampedArray(frame.data.length);
+      state.maskedFrameData = new Uint8ClampedArray(frame.data.length);
+    }
+    const preprocessed = preprocessLarkSignature(
+      frame.data,
+      state.preprocessedFrameData,
+      state.colorMappingGamma,
     );
+    frameData = effect === 'mobile'
+      ? renderLarkMobile(
+        preprocessed,
+        undefined,
+        state.maskedFrameData,
+      )
+      : renderLarkPc(
+        preprocessed,
+        undefined,
+        state.maskedFrameData,
+      );
   }
-  const canvasKey = mapped ? 'mappedFrameCanvas' : 'frameCanvas';
-  if (!state[canvasKey]) {
-    state[canvasKey] = document.createElement('canvas');
-    state[canvasKey].width = state.animation.width;
-    state[canvasKey].height = state.animation.height;
-  }
-  const frameData = mapped
-    ? mapToLuminanceAlpha(
-      state.animation.frames[index].data,
-      state.mappedFrameData,
-    )
-    : state.animation.frames[index].data;
-  state[canvasKey]
+  state[targetCanvasKey]
     .getContext('2d')
     .putImageData(
       new ImageData(
@@ -167,7 +199,7 @@ function sourceForFrame(index = state.selectedFrame, mapped = false) {
       0,
       0,
     );
-  return state[canvasKey];
+  return state[targetCanvasKey];
 }
 
 function resetCrop() {
@@ -181,67 +213,115 @@ function resetCrop() {
   renderOutputPreview();
 }
 
-function selectFrame(index) {
-  if (!state.animation || index < 0 || index >= state.animation.frames.length) return;
+async function selectFrame(index) {
+  if (!state.animation || index < 0 || index >= state.animation.frameCount) return;
+  const animation = state.animation;
+  let frame;
+  try {
+    frame = await animation.getFrame(index);
+  } catch (error) {
+    setNotice(error.message || `无法读取第 ${index + 1} 帧。`);
+    return;
+  }
+  if (state.animation !== animation) return;
   state.selectedFrame = index;
+  state.selectedFrameData = frame;
   for (const button of framePicker.querySelectorAll('.frame-option')) {
     const selected = Number(button.dataset.frameIndex) === index;
     button.classList.toggle('selected', selected);
     button.setAttribute('aria-selected', String(selected));
   }
   drawEditor();
+  renderOutputPreview();
 }
 
 function renderFramePicker() {
+  state.framePickerGeneration += 1;
+  const generation = state.framePickerGeneration;
   framePicker.replaceChildren();
   frameSection.hidden = !isAnimated();
-  animationBadge.hidden = !isAnimated();
-  mappingWarning.hidden = !isAnimated();
   if (!isAnimated()) return;
 
-  frameCount.textContent = `${state.animation.frames.length} 帧`;
-  const fragment = document.createDocumentFragment();
-  state.animation.frames.forEach((frame, index) => {
-    const button = document.createElement('button');
-    button.className = 'frame-option';
-    button.type = 'button';
-    button.dataset.frameIndex = String(index);
-    button.setAttribute('role', 'option');
-    button.setAttribute('aria-label', `第 ${index + 1} 帧，停留 ${frame.delay} 毫秒`);
-    button.setAttribute('aria-selected', String(index === state.selectedFrame));
-    button.title = `第 ${index + 1} 帧 · ${frame.delay} ms`;
-    if (index === state.selectedFrame) button.classList.add('selected');
+  frameCount.textContent = `${state.animation.frameCount} 帧`;
+  framePicker.scrollLeft = 0;
+  const track = document.createElement('div');
+  track.className = 'frame-picker-track';
+  track.style.width =
+    `${state.animation.frameCount * FRAME_OPTION_STEP - FRAME_OPTION_GAP}px`;
+  framePicker.append(track);
 
-    const thumbnail = document.createElement('canvas');
-    thumbnail.width = 88;
-    thumbnail.height = 66;
-    const context = thumbnail.getContext('2d');
-    context.imageSmoothingEnabled = true;
-    context.imageSmoothingQuality = 'high';
-    const scale = Math.min(
-      thumbnail.width / state.animation.width,
-      thumbnail.height / state.animation.height,
-    );
-    const width = Math.max(1, Math.round(state.animation.width * scale));
-    const height = Math.max(1, Math.round(state.animation.height * scale));
-    context.drawImage(
-      sourceForFrame(index),
-      Math.round((thumbnail.width - width) / 2),
-      Math.round((thumbnail.height - height) / 2),
-      width,
-      height,
-    );
+  const paintWindow = () => {
+    if (generation !== state.framePickerGeneration) return;
+    const { start, end } = visibleFrameRange({
+      scrollLeft: framePicker.scrollLeft,
+      viewportWidth: framePicker.clientWidth,
+      frameCount: state.animation.frameCount,
+    });
+    const fragment = document.createDocumentFragment();
+    for (let index = start; index < end; index += 1) {
+      const button = document.createElement('button');
+      button.className = 'frame-option';
+      button.style.left = `${index * FRAME_OPTION_STEP}px`;
+      button.type = 'button';
+      button.dataset.frameIndex = String(index);
+      button.setAttribute('role', 'option');
+      button.setAttribute('aria-label', `第 ${index + 1} 帧`);
+      button.setAttribute('aria-selected', String(index === state.selectedFrame));
+      if (index === state.selectedFrame) button.classList.add('selected');
 
-    const label = document.createElement('span');
-    label.textContent = `${index + 1}`;
-    button.append(thumbnail, label);
-    button.addEventListener('click', () => selectFrame(index));
-    fragment.append(button);
-  });
-  framePicker.append(fragment);
+      const thumbnail = document.createElement('canvas');
+      thumbnail.width = FRAME_OPTION_WIDTH;
+      thumbnail.height = 66;
+      const label = document.createElement('span');
+      label.textContent = `${index + 1}`;
+      button.append(thumbnail, label);
+      button.addEventListener('click', () => void selectFrame(index));
+      fragment.append(button);
+
+      const animation = state.animation;
+      void animation.getFrame(index).then((frame) => {
+        if (
+          generation !== state.framePickerGeneration ||
+          state.animation !== animation ||
+          !button.isConnected
+        ) return;
+        button.setAttribute(
+          'aria-label',
+          `第 ${index + 1} 帧，停留 ${frame.delay} 毫秒`,
+        );
+        button.title = `第 ${index + 1} 帧 · ${frame.delay} ms`;
+        const source = frameToCanvas(
+          frame,
+          animation.width,
+          animation.height,
+        );
+        const context = thumbnail.getContext('2d');
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = 'high';
+        const scale = Math.min(
+          thumbnail.width / animation.width,
+          thumbnail.height / animation.height,
+        );
+        const width = Math.max(1, Math.round(animation.width * scale));
+        const height = Math.max(1, Math.round(animation.height * scale));
+        context.drawImage(
+          source,
+          Math.round((thumbnail.width - width) / 2),
+          Math.round((thumbnail.height - height) / 2),
+          width,
+          height,
+        );
+      }).catch(() => {});
+    }
+    track.replaceChildren(fragment);
+  };
+  state.framePickerRender = paintWindow;
+  paintWindow();
 }
 
 async function chooseFile(file) {
+  state.uploadGeneration += 1;
+  const generation = state.uploadGeneration;
   setNotice();
   if (!file) return;
   if (!isSupported(file)) {
@@ -256,48 +336,71 @@ async function chooseFile(file) {
     setNotice('图片超过 10 MB，请压缩后再上传。');
     return;
   }
+  setNotice('正在读取图片信息…', 'success');
+  await new Promise((resolve) => requestAnimationFrame(resolve));
   let animation;
   try {
-    animation = await decodeImageFrames(file);
+    animation = await openImageFrames(file);
   } catch (error) {
     setNotice(error.message || '无法读取图片内容，请换一张图片。');
     return;
   }
 
+  if (generation !== state.uploadGeneration) {
+    animation.close();
+    return;
+  }
+  state.animation?.close();
   if (state.imageUrl?.startsWith('blob:')) URL.revokeObjectURL(state.imageUrl);
-  if (state.transportUrl) {
-    URL.revokeObjectURL(state.transportUrl);
-    state.transportUrl = null;
+  let first;
+  try {
+    first = await animation.getFrame(0);
+  } catch (error) {
+    animation.close();
+    setNotice(error.message || '无法读取图片首帧，请换一张图片。');
+    return;
+  }
+  if (generation !== state.uploadGeneration) {
+    animation.close();
+    return;
   }
   const firstFrame = frameToCanvas(
-    animation.frames[0],
+    first,
     animation.width,
     animation.height,
   );
   const imageUrl = firstFrame.toDataURL('image/png');
   try {
     const image = await loadImage(imageUrl);
+    if (generation !== state.uploadGeneration) {
+      animation.close();
+      return;
+    }
     state.file = file;
     state.image = image;
     state.imageUrl = imageUrl;
     state.animation = animation;
     state.selectedFrame = 0;
+    state.selectedFrameData = first;
     state.frameCanvas = null;
     state.mappedFrameCanvas = null;
     state.mappedFrameData = null;
-    fileName.textContent = file.name || '粘贴的图片';
+    state.maskedFrameCanvas = null;
+    state.maskedFrameData = null;
+    state.preprocessedFrameData = null;
     fileDetail.textContent =
-      `${image.naturalWidth} × ${image.naturalHeight} · ${animation.frames.length} 帧 · ${formatBytes(file.size)}`;
-    uploadButtonLabel.textContent = '换一张图片';
+      `${image.naturalWidth} × ${image.naturalHeight} · ${animation.frameCount} 帧 · ${formatBytes(file.size)}`;
     emptyStage.hidden = true;
     canvasStage.hidden = false;
-    resetGridButton.disabled = false;
+    fileBar.hidden = false;
     generateButton.disabled = false;
-    transportDebug.hidden = true;
+    configOutput.hidden = true;
     updateCopyLabel();
     renderFramePicker();
     resetCrop();
+    setNotice();
   } catch (error) {
+    animation.close();
     setNotice(error.message);
   }
 }
@@ -368,24 +471,28 @@ function drawEditor() {
   );
 
   const { cols, rows } = currentGrid();
-  const rects = tileRects(state.crop, cols, rows, state.mode, state.gapRatio);
-  if (state.mode === 'precut') {
-    editorContext.fillStyle = 'rgba(246, 247, 251, 0.94)';
-    editorContext.fillRect(rect.x, rect.y, rect.width, rect.height);
-    for (const tile of rects) {
-      const displayTile = cropToDisplay(tile);
-      editorContext.drawImage(
-        source,
-        tile.x * sourceWidth(),
-        tile.y * sourceHeight(),
-        tile.width * sourceWidth(),
-        tile.height * sourceHeight(),
-        displayTile.x,
-        displayTile.y,
-        displayTile.width,
-        displayTile.height,
-      );
-    }
+  const rects = tileRects(
+    state.crop,
+    cols,
+    rows,
+    'precut',
+    state.precutGapRatio,
+  );
+  editorContext.fillStyle = 'rgba(246, 247, 251, 0.94)';
+  editorContext.fillRect(rect.x, rect.y, rect.width, rect.height);
+  for (const tile of rects) {
+    const displayTile = cropToDisplay(tile);
+    editorContext.drawImage(
+      source,
+      tile.x * sourceWidth(),
+      tile.y * sourceHeight(),
+      tile.width * sourceWidth(),
+      tile.height * sourceHeight(),
+      displayTile.x,
+      displayTile.y,
+      displayTile.width,
+      displayTile.height,
+    );
   }
   editorContext.strokeStyle = '#ffffff';
   editorContext.lineWidth = 2;
@@ -504,7 +611,13 @@ function updateDrag(event) {
 
 function sourceTileRects() {
   const { cols, rows } = currentGrid();
-  return tileRects(state.crop, cols, rows, state.mode, state.gapRatio).map((tile) => ({
+  return tileRects(
+    state.crop,
+    cols,
+    rows,
+    'precut',
+    state.precutGapRatio,
+  ).map((tile) => ({
     ...tile,
     x: tile.x * sourceWidth(),
     y: tile.y * sourceHeight(),
@@ -526,279 +639,149 @@ function renderOutputPreview() {
   }
   const { cols, rows } = currentGrid();
   const availableWidth = Math.max(188, outputPreview.clientWidth - 28);
-  const width = Math.min(
-    Math.max(80, Math.floor((availableWidth - 12) / 2)),
-    200,
-  );
-  const { widthUnits, heightUnits } = compositionUnits(cols, rows, state.gapRatio);
-  const tileSize = width / widthUnits;
-  const gap = tileSize * state.gapRatio;
-  const height = heightUnits * tileSize;
+  const {
+    tileSize,
+    gap,
+    width,
+    height,
+  } = previewLayout({
+    cols,
+    rows,
+    gapRatio: state.previewGapRatio,
+    availableWidth,
+    actualSize: state.previewActualSize,
+    scale: state.previewScale,
+  });
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const comparison = document.createElement('div');
-  comparison.className = 'preview-comparison';
   const tiles = sourceTileRects();
 
-  const createPreview = (labelText, mapped) => {
-    const item = document.createElement('figure');
-    item.className = [
-      'preview-item',
-      mapped ? 'mapped' : 'original',
-      mapped === state.colorMapping ? 'active' : '',
-    ].filter(Boolean).join(' ');
-    const label = document.createElement('figcaption');
-    label.textContent = labelText;
-    const preview = document.createElement('canvas');
-    preview.className = 'preview-composite';
-    preview.width = Math.round(width * dpr);
-    preview.height = Math.round(height * dpr);
-    preview.style.width = `${width}px`;
-    preview.style.height = `${height}px`;
-    const context = preview.getContext('2d');
-    context.setTransform(dpr, 0, 0, dpr, 0, 0);
-    context.imageSmoothingEnabled = true;
-    context.imageSmoothingQuality = 'high';
-    item.append(label, preview);
-    comparison.append(item);
-    return { context, mapped };
-  };
-  const previews = [
-    createPreview('原始色彩', false),
-    createPreview('色彩映射后', true),
-  ];
+  const preview = document.createElement('canvas');
+  preview.className = 'preview-composite';
+  preview.width = Math.round(width * dpr);
+  preview.height = Math.round(height * dpr);
+  preview.style.width = `${width}px`;
+  preview.style.height = `${height}px`;
+  const context = preview.getContext('2d');
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
 
-  const drawFrame = (frameIndex) => {
-    for (const preview of previews) {
-      const { context, mapped } = preview;
-      context.clearRect(0, 0, width, height);
-      const source = sourceForFrame(frameIndex, mapped);
-      for (const tile of tiles) {
-        const x = tile.col * (tileSize + gap);
-        const y = tile.row * (tileSize + gap);
-        context.drawImage(
-          source,
-          tile.x,
-          tile.y,
-          tile.width,
-          tile.height,
-          x,
-          y,
-          tileSize,
-          tileSize,
-        );
-      }
+  const drawFrame = async (frameIndex) => {
+    const animation = state.animation;
+    const frame = await animation.getFrame(frameIndex);
+    if (generation !== state.previewGeneration || state.animation !== animation) {
+      return null;
     }
+    context.clearRect(0, 0, width, height);
+    if (state.previewMask) {
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, width, height);
+    }
+    const source = sourceForFrame(
+      frameIndex,
+      state.previewMask ? state.previewPlatform : 'original',
+    );
+    for (const tile of tiles) {
+      const x = tile.col * (tileSize + gap);
+      const y = tile.row * (tileSize + gap);
+      context.drawImage(
+        source,
+        tile.x,
+        tile.y,
+        tile.width,
+        tile.height,
+        x,
+        y,
+        tileSize,
+        tileSize,
+      );
+    }
+    return frame;
   };
-  drawFrame(0);
-  outputPreview.replaceChildren(comparison);
-  if (isAnimated()) {
+  const viewport = document.createElement('div');
+  viewport.className = 'preview-viewport';
+  viewport.append(preview);
+  outputPreview.classList.toggle('actual-size', state.previewActualSize);
+  outputPreview.replaceChildren(viewport);
+  if (state.previewPlatform === 'mobile') {
+    void drawFrame(0);
+  } else if (state.animation.lazy) {
+    void drawFrame(state.selectedFrame);
+  } else if (isAnimated()) {
     let frameIndex = 0;
-    const scheduleNextFrame = () => {
+    const scheduleNextFrame = async () => {
+      const frame = await drawFrame(frameIndex);
+      if (!frame) return;
       state.previewTimer = setTimeout(() => {
         if (generation !== state.previewGeneration) return;
-        frameIndex = (frameIndex + 1) % state.animation.frames.length;
-        drawFrame(frameIndex);
-        scheduleNextFrame();
-      }, state.animation.frames[frameIndex].delay);
+        frameIndex = (frameIndex + 1) % state.animation.frameCount;
+        void scheduleNextFrame();
+      }, frame.delay);
     };
-    scheduleNextFrame();
+    void scheduleNextFrame();
+  } else {
+    void drawFrame(0);
   }
 }
 
-function paintTransportFrame(context, frame, layout) {
-  context.fillStyle = '#ffffff';
-  context.fillRect(0, 0, context.canvas.width, context.canvas.height);
-  context.drawImage(
-    frameToCanvas(
-      frame,
-      layout.sourceWidth,
-      layout.sourceHeight,
-    ),
-    layout.sourceX,
-    layout.sourceY,
-  );
-}
-
-function currentRecipeToken(layout) {
+function currentRecipeToken() {
   const { cols, rows } = currentGrid();
   return encodeSignatureRecipe(
     createSignatureRecipe({
       sourceWidth: sourceWidth(),
       sourceHeight: sourceHeight(),
-      sourceFrames: state.animation.frames.length,
+      sourceFrames: state.animation.frameCount,
       cols,
       rows,
       crop: state.crop,
-      mode: state.mode,
-      gapRatio: state.gapRatio,
+      mode: 'precut',
+      gapRatio: state.precutGapRatio,
       colorMapping: state.colorMapping,
-      outputSize: OUTPUT_SIZE,
+      colorMappingGamma: state.colorMappingGamma,
+      outputSize: LEGACY_OUTPUT_SIZE,
       contentRect: {
-        x: layout.sourceX / layout.canvasWidth,
-        y: layout.sourceY / layout.canvasHeight,
-        width: layout.sourceWidth / layout.canvasWidth,
-        height: layout.sourceHeight / layout.canvasHeight,
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
       },
     }),
   );
 }
 
-function drawQr(context, token, x, y, size) {
-  const qr = QRCode.create(token, { errorCorrectionLevel: 'H' });
-  const margin = QR_QUIET_ZONE_MODULES;
-  const cells = qr.modules.size + margin * 2;
-  const scale = Math.max(QR_MIN_MODULE_PIXELS, Math.floor(size / cells));
-  const renderedSize = cells * scale;
-  const left = x + Math.floor((size - renderedSize) / 2);
-  const top = y + Math.floor((size - renderedSize) / 2);
-  context.fillStyle = '#ffffff';
-  context.fillRect(x, y, size, size);
-  context.fillStyle = '#000000';
-  for (let row = 0; row < qr.modules.size; row += 1) {
-    for (let col = 0; col < qr.modules.size; col += 1) {
-      if (!qr.modules.get(row, col)) continue;
-      context.fillRect(
-        left + (col + margin) * scale,
-        top + (row + margin) * scale,
-        scale,
-        scale,
-      );
-    }
+async function copyConfigText(token) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(token);
+    return true;
   }
+  configText.select();
+  return document.execCommand('copy');
 }
 
-async function buildTransportImage() {
-  const placeholderLayout = {
-    canvasWidth: sourceWidth(),
-    canvasHeight: sourceHeight() + 1,
-    sourceX: 0,
-    sourceY: 0,
-    sourceWidth: sourceWidth(),
-    sourceHeight: sourceHeight(),
-  };
-  const placeholderToken = currentRecipeToken(placeholderLayout);
-  const qrModules = QRCode.create(placeholderToken, {
-    errorCorrectionLevel: 'H',
-  }).modules.size;
-  const qrSize = qrSizeForModules(qrModules);
-  const layout = transportLayoutForSource(
-    sourceWidth(),
-    sourceHeight(),
-    qrSize,
-  );
-  const recipeToken = currentRecipeToken(layout);
-  const frames = state.animation.frames.map((frame) => {
-    const canvas = document.createElement('canvas');
-    canvas.width = layout.canvasWidth;
-    canvas.height = layout.canvasHeight;
-    const context = canvas.getContext('2d');
-    paintTransportFrame(context, frame, layout);
-    drawQr(
-      context,
-      recipeToken,
-      Math.round((layout.canvasWidth - layout.qrSize) / 2),
-      layout.sourceHeight,
-      layout.qrSize,
-    );
-    return {
-      data: context.getImageData(0, 0, canvas.width, canvas.height).data,
-      delay: frame.delay,
-    };
-  });
-  let blob;
-  if (state.animation.frames.length === 1) {
-    const canvas = frameToCanvas(
-      frames[0],
-      layout.canvasWidth,
-      layout.canvasHeight,
-    );
-    blob = await new Promise((resolve, reject) => {
-      canvas.toBlob(
-        (value) => (value ? resolve(value) : reject(new Error('无法生成传输 PNG'))),
-        'image/png',
-      );
-    });
-  } else {
-    blob = await encodeGifFrames({
-      width: layout.canvasWidth,
-      height: layout.canvasHeight,
-      frames,
-      loop: state.animation.loop,
-    });
-  }
-  if (blob.size > 20 * 1024 * 1024) {
-    throw new Error('传输图片超过 20 MB，请缩小图片或减少帧数后重试');
-  }
-  return {
-    blob,
-    previewUrl: URL.createObjectURL(blob),
-    layout,
-    recipeToken,
-  };
-}
-
-function startAsyncCopyImage(blob) {
-  if (!navigator.clipboard?.write || !window.ClipboardItem) return null;
-  if (window.ClipboardItem.supports?.(blob.type) === false) return null;
-  try {
-    return navigator.clipboard
-      .write([
-        new ClipboardItem({ [blob.type]: blob }),
-      ])
-      .then(
-        () => true,
-        () => false,
-      );
-  } catch {
-    return null;
-  }
-}
-
-async function createSignatureTransport() {
+async function createSignatureConfig() {
   if (!state.image || !state.file || !state.crop || generateButton.disabled) return;
   generateButton.disabled = true;
-  spinner.hidden = false;
   setNotice();
   try {
-    const { blob, previewUrl, layout, recipeToken } =
-      await buildTransportImage();
-    if (state.transportUrl) URL.revokeObjectURL(state.transportUrl);
-    state.transportUrl = previewUrl;
-    transportPreview.src = previewUrl;
-    transportDownload.href = previewUrl;
-    const animated = isAnimated();
-    const extension = animated ? 'gif' : 'png';
-    const formatLabel = animated ? 'GIF' : 'PNG';
-    transportDownload.download = `lark-signature-transport.${extension}`;
-    transportDetail.textContent =
-      `${layout.canvasWidth} × ${layout.canvasHeight} · ${state.animation.frames.length} 帧 · ${state.colorMapping ? '色彩映射' : '原始色彩'} · ${recipeToken.length} 字符`;
-    transportDebug.hidden = false;
-    if (animated) {
-      transportDownload.click();
-      setNotice(
-        'GIF 中间图已下载；请将下载的 .gif 文件作为图片上传给 Buddy Bot。不要右键复制，浏览器会转成单帧 JPEG。',
-        'success',
-      );
-      return;
-    }
-    const clipboardPromise = startAsyncCopyImage(blob);
-    const nativeCopied = clipboardPromise ? await clipboardPromise : false;
-    if (!nativeCopied) {
-      const reason = window.isSecureContext
-        ? `当前浏览器不支持 ${formatLabel} 图片剪贴板或 iframe 未授权`
-        : '当前 HTTP 调试页不是安全上下文';
-      throw new Error(
-        `${reason}；请右键下方实际传输图选择“复制图片”，或下载 ${formatLabel} 后发送`,
-      );
-    }
+    const token = currentRecipeToken();
+    configText.value = token;
+    configDetail.textContent = `${token.length} 字符`;
+    configOutput.hidden = false;
+    const copied = await copyConfigText(token);
     setNotice(
-      `已通过原生 ${formatLabel} 剪贴板复制带 QR 图片，请粘贴发送给 Buddy Bot`,
+      copied
+        ? '配置字符串已复制；请将原图片和配置字符串发送给 Buddy Bot。'
+        : '配置字符串已生成；请从下方文本框复制后与原图片一起发送给 Buddy Bot。',
       'success',
     );
   } catch (error) {
-    setNotice(error.message || '复制失败，请稍后重试。');
+    configText.select();
+    setNotice(
+      configText.value
+        ? '配置字符串已生成；自动复制失败，请从下方文本框手动复制。'
+        : error.message || '配置字符串生成失败，请稍后重试。',
+    );
   } finally {
-    spinner.hidden = true;
     generateButton.disabled = false;
     updateCopyLabel();
   }
@@ -812,23 +795,11 @@ function setGrid(cols, rows) {
   if (state.image) resetCrop();
 }
 
-function setMode(value) {
-  state.mode = value;
-  if (state.image) resetCrop();
-}
-
 uploadButton.addEventListener('click', () => fileInput.click());
 emptyStage.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => chooseFile(fileInput.files?.[0]));
 resetGridButton.addEventListener('click', resetCrop);
-generateButton.addEventListener('click', createSignatureTransport);
-transportPreview.addEventListener('contextmenu', (event) => {
-  if (!isAnimated()) return;
-  event.preventDefault();
-  setNotice(
-    '请使用下方“下载传输图片”，再将 .gif 文件作为图片上传；右键复制会转成单帧图片。',
-  );
-});
+generateButton.addEventListener('click', createSignatureConfig);
 colorMappingInput.addEventListener('change', () => {
   state.colorMapping = colorMappingInput.checked;
   colorMappingInput
@@ -837,18 +808,52 @@ colorMappingInput.addEventListener('change', () => {
   updateCopyLabel();
   if (state.image) renderOutputPreview();
 });
+mappingGammaInput.addEventListener('input', () => {
+  state.colorMappingGamma = Number(mappingGammaInput.value) / 100;
+  mappingGammaOutput.textContent = state.colorMappingGamma.toFixed(2);
+  if (state.image) renderOutputPreview();
+});
+previewMaskInput.addEventListener('change', () => {
+  state.previewMask = previewMaskInput.checked;
+  if (state.image) renderOutputPreview();
+});
+previewPlatform.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-platform]');
+  if (!button) return;
+  state.previewPlatform = button.dataset.platform;
+  for (const candidate of previewPlatform.querySelectorAll('[data-platform]')) {
+    candidate.classList.toggle('active', candidate === button);
+  }
+  if (state.image) renderOutputPreview();
+});
+previewActualSizeInput.addEventListener('change', () => {
+  state.previewActualSize = previewActualSizeInput.checked;
+  if (state.image) renderOutputPreview();
+});
+
+previewScaleInput.addEventListener('input', () => {
+  state.previewScale = Number(previewScaleInput.value) / 100;
+  previewScaleOutput.textContent = `${previewScaleInput.value}%`;
+  if (state.image) renderOutputPreview();
+});
 
 function updateGridFromInputs({ commit = false } = {}) {
   let cols = gridColsInput.valueAsNumber;
   let rows = gridRowsInput.valueAsNumber;
   if (commit) {
-    cols = Math.max(1, Math.min(15, Number.isFinite(cols) ? Math.round(cols) : 1));
-    rows = Math.max(1, Math.min(15, Number.isFinite(rows) ? Math.round(rows) : 1));
+    cols = Math.max(
+      1,
+      Math.min(MAX_GRID_COLS, Number.isFinite(cols) ? Math.round(cols) : 1),
+    );
+    rows = Math.max(
+      1,
+      Math.min(MAX_GRID_ROWS, Number.isFinite(rows) ? Math.round(rows) : 1),
+    );
     gridColsInput.value = String(cols);
     gridRowsInput.value = String(rows);
   }
-  if (!Number.isInteger(cols) || cols < 1 || cols > 15) return;
-  if (!Number.isInteger(rows) || rows < 1 || rows > 15) return;
+  if (!Number.isInteger(cols) || cols < 1 || cols > MAX_GRID_COLS) return;
+  if (!Number.isInteger(rows) || rows < 1 || rows > MAX_GRID_ROWS) return;
   setGrid(cols, rows);
 }
 
@@ -858,17 +863,16 @@ for (const input of [gridColsInput, gridRowsInput]) {
   input.addEventListener('blur', () => updateGridFromInputs({ commit: true }));
 }
 
-modeOptions.addEventListener('change', (event) => {
-  if (event.target.name === 'mode') setMode(event.target.value);
+previewGapRatioInput.addEventListener('input', () => {
+  state.previewGapRatio = Number(previewGapRatioInput.value) / 100;
+  previewGapOutput.textContent = `${previewGapRatioInput.value}%`;
+  if (state.image) renderOutputPreview();
 });
 
-gapRatioInput.addEventListener('input', () => {
-  state.gapRatio = Number(gapRatioInput.value) / 100;
-  gapOutput.textContent = `${gapRatioInput.value}%`;
-  if (!state.image) return;
-  if (state.mode === 'precut') {
-    resetCrop();
-  } else {
+precutGapRatioInput.addEventListener('input', () => {
+  state.precutGapRatio = Number(precutGapRatioInput.value) / 100;
+  precutGapOutput.textContent = `${precutGapRatioInput.value}%`;
+  if (state.image) {
     drawEditor();
     renderOutputPreview();
   }
@@ -926,4 +930,14 @@ window.addEventListener('resize', () => {
   if (!state.image) return;
   drawEditor();
   renderOutputPreview();
+  state.framePickerRender?.();
+});
+
+let framePickerFrame = null;
+framePicker.addEventListener('scroll', () => {
+  if (framePickerFrame !== null) return;
+  framePickerFrame = requestAnimationFrame(() => {
+    framePickerFrame = null;
+    state.framePickerRender?.();
+  });
 });

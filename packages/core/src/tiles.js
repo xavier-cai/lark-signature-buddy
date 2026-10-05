@@ -1,7 +1,10 @@
-import { tileRects } from './grid.js';
+import {
+  MAX_GRID_COLS,
+  MAX_GRID_ROWS,
+  tileRects,
+} from './grid.js';
 
-export const MAX_TILES = 225;
-export const MAX_FRAME_TILE_WORK = 3600;
+export const MAX_TILES = MAX_GRID_COLS * MAX_GRID_ROWS;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -28,21 +31,21 @@ function toPixelRect(rect, imageWidth, imageHeight) {
   };
 }
 
-export function buildTileSpecs(recipe, transportImage) {
-  const { width: transportWidth, height: transportHeight } = transportImage;
+export function buildTileSpecs(recipe, sourceImage) {
+  const { width: sourceWidth, height: sourceHeight } = sourceImage;
   if (
-    !Number.isInteger(transportWidth) ||
-    !Number.isInteger(transportHeight) ||
-    transportWidth < 1 ||
-    transportHeight < 1
+    !Number.isInteger(sourceWidth) ||
+    !Number.isInteger(sourceHeight) ||
+    sourceWidth < 1 ||
+    sourceHeight < 1
   ) {
-    throw new Error('传输图片尺寸无效');
+    throw new Error('原图片尺寸无效');
   }
 
   const source = toPixelRect(
     recipe.transport.contentRect,
-    transportWidth,
-    transportHeight,
+    sourceWidth,
+    sourceHeight,
   );
   const actualAspect = source.width / source.height;
   const expectedAspect = recipe.source.width / recipe.source.height;
@@ -62,11 +65,6 @@ export function buildTileSpecs(recipe, transportImage) {
   if (normalizedTiles.length > MAX_TILES) {
     throw new Error(`切片数超过 ${MAX_TILES} 张上限`);
   }
-  if (normalizedTiles.length * recipe.source.frames > MAX_FRAME_TILE_WORK) {
-    throw new Error(
-      `动图处理量过大：${normalizedTiles.length} 张 × ${recipe.source.frames} 帧，超过 ${MAX_FRAME_TILE_WORK} 上限`,
-    );
-  }
 
   return normalizedTiles.map((tile, index) => {
     const relative = toPixelRect(tile, source.width, source.height);
@@ -78,8 +76,10 @@ export function buildTileSpecs(recipe, transportImage) {
       top: source.top + relative.top,
       width: relative.width,
       height: relative.height,
-      outputWidth: recipe.output.width,
-      outputHeight: recipe.output.height,
+      // V1 recipes carry a legacy square output size. Preserve source pixels
+      // instead: enlarging every crop made small animated tiles enormous.
+      outputWidth: relative.width,
+      outputHeight: relative.height,
     };
   });
 }
