@@ -712,7 +712,7 @@ function renderOutputPreview() {
   viewport.append(preview);
   previewContent.replaceChildren(viewport);
   applyPreviewTransform();
-  if (isAnimated()) {
+  if (isAnimated() && state.previewPlatform !== 'mobile') {
     let frameIndex = state.selectedFrame;
     const scheduleNextFrame = async () => {
       const frame = await drawFrame(frameIndex);

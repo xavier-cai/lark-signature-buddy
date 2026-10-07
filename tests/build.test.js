@@ -107,10 +107,8 @@ test('build creates a self-contained static application', async () => {
   assert.match(output, /addEventListener\("wheel"/);
   assert.match(output, /addEventListener\("pointerdown"/);
   assert.doesNotMatch(output, /\.preview-reset:disabled/);
-  assert.doesNotMatch(
-    output,
-    /state\.animation\.lazy|state\.previewPlatform === 'mobile'/,
-  );
+  assert.doesNotMatch(output, /state\.animation\.lazy/);
+  assert.match(output, /previewPlatform!=="mobile"/);
   assert.match(output, />遮罩</);
   assert.doesNotMatch(output, /最终组合效果|动图预览/);
   assert.match(output, /3370ff/i);
