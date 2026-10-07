@@ -41,7 +41,7 @@ test('build creates a self-contained static application', async () => {
   assert.doesNotMatch(output, /@media\s*\(max-width:\s*860px\)/);
   assert.match(
     output,
-    /min-height:\s*clamp\(380px,\s*46vw,\s*550px\)/,
+    /min-height:\s*clamp\(350px,\s*43vw,\s*510px\)/,
   );
   assert.match(output, /@media\s*\(max-width:\s*900px\)/);
   assert.match(
@@ -104,7 +104,11 @@ test('build creates a self-contained static application', async () => {
   assert.doesNotMatch(output, /最终组合效果|动图预览/);
   assert.match(output, /3370ff/i);
   assert.match(output, /id="config-text"/);
-  assert.match(output, /选择图片后即可生成配置/);
+  assert.match(
+    output,
+    /id="generate-button"[^>]*disabled>\s*<span>生成配置<\/span>/,
+  );
+  assert.doesNotMatch(output, /id="generate-label"|选择图片后即可生成配置/);
   assert.doesNotMatch(output, /生成配置字符串/);
   assert.doesNotMatch(output, /拖动网格定位/);
   assert.doesNotMatch(output, /id="file-name"/);

@@ -57,22 +57,19 @@
         </div>
 
         <aside class="control-panel">
-          <section class="control-section">
-            <div class="section-heading">
-              <div>
+          <section class="control-section grid-section">
+            <div class="grid-control-row">
+              <div class="grid-heading">
                 <p class="step-label">网格</p>
-                <h2>输入切图规格</h2>
+                <span class="tile-count" id="tile-count">4 张</span>
               </div>
-              <span class="tile-count" id="tile-count">4 张</span>
-            </div>
-            <div class="grid-inputs">
               <label>
-                <span>列数</span>
+                <span>列</span>
                 <input id="grid-cols" type="number" min="1" max="13" value="2" inputmode="numeric" />
               </label>
               <span class="grid-times" aria-hidden="true">×</span>
               <label>
-                <span>行数</span>
+                <span>行</span>
                 <input id="grid-rows" type="number" min="1" max="5" value="2" inputmode="numeric" />
               </label>
             </div>
@@ -157,7 +154,7 @@
 
           <div class="notice" id="notice" role="status" aria-live="polite"></div>
           <button class="generate-button" id="generate-button" type="button" disabled>
-            <span id="generate-label">选择图片后即可生成配置</span>
+            <span>生成配置</span>
           </button>
           <section class="config-output" id="config-output" hidden>
             <div>

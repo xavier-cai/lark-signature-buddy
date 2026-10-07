@@ -35,7 +35,7 @@ button {
 .shell {
   width: min(1180px, calc(100% - 36px));
   margin: 0 auto;
-  padding: 34px 0 24px;
+  padding: 22px 0 18px;
 }
 
 .eyebrow,
@@ -49,7 +49,7 @@ button {
 
 h2 {
   margin: 3px 0 0;
-  font-size: 17px;
+  font-size: 15px;
   letter-spacing: -0.015em;
 }
 
@@ -73,21 +73,21 @@ h2 {
 .control-panel,
 .results {
   border: 1px solid rgba(31, 38, 56, 0.08);
-  border-radius: 23px;
+  border-radius: 19px;
   background: rgba(255, 255, 255, 0.9);
   box-shadow: 0 17px 48px rgba(33, 44, 74, 0.08);
 }
 
 .canvas-panel {
   min-width: 0;
-  padding: 19px;
+  padding: 14px;
 }
 
 .empty-stage,
 .canvas-stage {
   width: 100%;
-  min-height: clamp(380px, 46vw, 550px);
-  border-radius: 16px;
+  min-height: clamp(350px, 43vw, 510px);
+  border-radius: 14px;
 }
 
 .empty-stage {
@@ -95,7 +95,7 @@ h2 {
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  gap: 10px;
+  gap: 7px;
   border: 1.5px dashed #b4c6f2;
   color: #202532;
   background: #f8faff;
@@ -109,9 +109,9 @@ h2 {
 
 .upload-icon {
   display: grid;
-  width: 62px;
-  height: 62px;
-  margin-bottom: 6px;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 4px;
   place-items: center;
   border-radius: 18px;
   color: #2866f6;
@@ -119,16 +119,18 @@ h2 {
 }
 
 .empty-stage strong {
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .empty-stage span:not(.upload-icon) {
   color: #747a89;
+  font-size: 14px;
 }
 
 .empty-stage small {
-  margin-top: 8px;
+  margin-top: 5px;
   color: #979cab;
+  font-size: 11px;
 }
 
 .canvas-stage {
@@ -147,13 +149,13 @@ h2 {
   display: block;
   width: 100%;
   height: auto;
-  max-height: clamp(380px, 46vw, 550px);
+  max-height: clamp(350px, 43vw, 510px);
   touch-action: none;
 }
 
 .file-bar {
   display: flex;
-  min-height: 55px;
+  min-height: 44px;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -187,11 +189,11 @@ h2 {
 }
 
 .control-panel {
-  padding: 8px 21px 21px;
+  padding: 5px 16px 16px;
 }
 
 .control-section {
-  padding: 18px 0;
+  padding: 12px 0;
   border-bottom: 1px solid #eceef3;
 }
 
@@ -211,10 +213,10 @@ h2 {
 
 .advanced-settings summary {
   position: relative;
-  padding: 18px 24px 18px 0;
+  padding: 13px 24px 13px 0;
   color: #424957;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 800;
   list-style: none;
 }
@@ -358,15 +360,15 @@ h2 {
 }
 
 .mapping-control strong {
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .mapping-gamma-control {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 .preview-scale-control {
-  margin-top: 10px;
+  margin-top: 7px;
 }
 
 .switch-control {
@@ -430,8 +432,8 @@ h2 {
 .preview-controls {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 7px;
+  flex-wrap: nowrap;
   justify-content: flex-end;
 }
 
@@ -443,14 +445,14 @@ h2 {
 }
 
 .preview-platform button {
-  min-width: 52px;
-  height: 27px;
-  padding: 0 9px;
+  min-width: 38px;
+  height: 24px;
+  padding: 0 7px;
   border: 0;
   border-radius: 7px;
   color: #697080;
   background: transparent;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
 }
 
@@ -463,10 +465,10 @@ h2 {
 .preview-switch-control {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   color: #626876;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 750;
 }
 
@@ -479,8 +481,8 @@ h2 {
 
 .preview-switch-control i {
   position: relative;
-  width: 36px;
-  height: 21px;
+  width: 30px;
+  height: 18px;
   border-radius: 999px;
   background: #c8ccd5;
   transition: background 160ms ease;
@@ -490,8 +492,8 @@ h2 {
   position: absolute;
   top: 3px;
   left: 3px;
-  width: 15px;
-  height: 15px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 2px 5px rgba(23, 31, 51, 0.25);
@@ -504,7 +506,7 @@ h2 {
 }
 
 .preview-switch-control input:checked + i::after {
-  transform: translateX(15px);
+  transform: translateX(12px);
 }
 
 .preview-switch-control input:focus-visible + i {
@@ -512,54 +514,58 @@ h2 {
   outline-offset: 2px;
 }
 
-.grid-inputs {
+.grid-control-row {
   display: flex;
-  margin-top: 14px;
-  align-items: flex-end;
-  gap: 11px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.grid-inputs label {
-  min-width: 0;
-  flex: 1;
+.grid-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
 
-.grid-inputs label span {
-  display: block;
-  margin-bottom: 6px;
+.grid-control-row label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.grid-control-row label span {
   color: #707684;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
-.grid-inputs input {
-  width: 100%;
-  height: 46px;
-  padding: 0 13px;
+.grid-control-row input {
+  width: 44px;
+  height: 32px;
+  padding: 0 7px;
   border: 1px solid #dfe2e9;
-  border-radius: 11px;
+  border-radius: 8px;
   color: #282d39;
   background: #fff;
   outline: none;
-  font-size: 17px;
+  font-size: 14px;
   font-weight: 800;
 }
 
-.grid-inputs input:focus {
+.grid-control-row input:focus {
   border-color: #6d92f5;
   box-shadow: 0 0 0 3px rgba(40, 102, 246, 0.1);
 }
 
 .grid-times {
-  padding-bottom: 11px;
   color: #8b90a0;
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 500;
 }
 
 .gap-control {
-  padding: 13px;
-  border-radius: 12px;
+  padding: 9px 10px;
+  border-radius: 10px;
   background: #f7f8fb;
 }
 
@@ -570,30 +576,31 @@ h2 {
 
 .range-heading label {
   color: #626876;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
 .range-heading output {
   color: #2866f6;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
 }
 
 .gap-control input[type="range"] {
   width: 100%;
-  margin: 12px 0 5px;
+  height: 16px;
+  margin: 6px 0 0;
   accent-color: #2866f6;
 }
 
 .preview-section {
-  padding-bottom: 9px;
+  padding-bottom: 6px;
 }
 
 .output-preview {
   display: grid;
-  height: 240px;
-  padding: 14px;
+  height: 190px;
+  padding: 10px;
   place-items: center;
   border-radius: 13px;
   color: #9297a5;
@@ -625,8 +632,8 @@ h2 {
 }
 
 .notice {
-  min-height: 28px;
-  padding: 7px 1px 3px;
+  min-height: 20px;
+  padding: 4px 1px 2px;
   color: #bf4048;
   font-size: 12px;
   line-height: 1.45;
@@ -639,12 +646,12 @@ h2 {
 .generate-button {
   display: flex;
   width: 100%;
-  height: 49px;
+  height: 40px;
   align-items: center;
   justify-content: center;
   gap: 9px;
   border: 0;
-  border-radius: 13px;
+  border-radius: 10px;
   color: white;
   background: #2866f6;
   box-shadow: 0 9px 21px rgba(40, 102, 246, 0.2);

@@ -63,7 +63,6 @@ const previewActualSizeInput = document.querySelector('#preview-actual-size');
 const previewMaskInput = document.querySelector('#preview-mask');
 const notice = document.querySelector('#notice');
 const generateButton = document.querySelector('#generate-button');
-const generateLabel = document.querySelector('#generate-label');
 const configOutput = document.querySelector('#config-output');
 const configDetail = document.querySelector('#config-detail');
 const configText = document.querySelector('#config-text');
@@ -99,12 +98,6 @@ const state = {
   display: null,
   drag: null,
 };
-
-function updateCopyLabel() {
-  generateLabel.textContent = state.image
-    ? '生成配置'
-    : '选择图片后即可生成配置';
-}
 
 function formatBytes(size) {
   if (size < 1024) return `${size} B`;
@@ -395,7 +388,6 @@ async function chooseFile(file) {
     fileBar.hidden = false;
     generateButton.disabled = false;
     configOutput.hidden = true;
-    updateCopyLabel();
     renderFramePicker();
     resetCrop();
     setNotice();
@@ -783,7 +775,6 @@ async function createSignatureConfig() {
     );
   } finally {
     generateButton.disabled = false;
-    updateCopyLabel();
   }
 }
 
@@ -791,7 +782,6 @@ function setGrid(cols, rows) {
   state.grid = `${cols}x${rows}`;
   const grid = currentGrid();
   tileCount.textContent = `${grid.cols * grid.rows} 张`;
-  updateCopyLabel();
   if (state.image) resetCrop();
 }
 
@@ -805,7 +795,6 @@ colorMappingInput.addEventListener('change', () => {
   colorMappingInput
     .closest('.switch-control')
     .querySelector('em').textContent = state.colorMapping ? '开启' : '关闭';
-  updateCopyLabel();
   if (state.image) renderOutputPreview();
 });
 mappingGammaInput.addEventListener('input', () => {
