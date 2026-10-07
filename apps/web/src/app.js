@@ -27,11 +27,15 @@ import {
   visibleFrameRange,
 } from './frame-window.js';
 import { previewLayout } from './preview-layout.js';
+import {
+  movePreview,
+  nextPreviewFrameIndex,
+  zoomPreviewAtPoint,
+} from './preview-transform.js';
 
-const MAX_BYTES = 10 * 1024 * 1024;
 const HANDLE_RADIUS = 9;
-// Kept in the V1 recipe for wire compatibility. The bot emits native-size
-// tiles so a small source crop is never enlarged before upload.
+// Kept in the V1 recipe for wire compatibility. The bot derives the actual
+// output dimensions from each crop and caps its longest edge at 50 px.
 const LEGACY_OUTPUT_SIZE = 512;
 const uploadButton = document.querySelector('#upload-button');
 const fileInput = document.querySelector('#file-input');
@@ -44,7 +48,6 @@ const fileDetail = document.querySelector('#file-detail');
 const resetGridButton = document.querySelector('#reset-grid');
 const gridColsInput = document.querySelector('#grid-cols');
 const gridRowsInput = document.querySelector('#grid-rows');
-const tileCount = document.querySelector('#tile-count');
 const frameSection = document.querySelector('#frame-section');
 const frameCount = document.querySelector('#frame-count');
 const framePicker = document.querySelector('#frame-picker');
@@ -53,17 +56,16 @@ const mappingGammaInput = document.querySelector('#mapping-gamma');
 const mappingGammaOutput = document.querySelector('#mapping-gamma-output');
 const previewGapRatioInput = document.querySelector('#preview-gap-ratio');
 const previewGapOutput = document.querySelector('#preview-gap-output');
-const previewScaleInput = document.querySelector('#preview-scale');
-const previewScaleOutput = document.querySelector('#preview-scale-output');
 const precutGapRatioInput = document.querySelector('#precut-gap-ratio');
 const precutGapOutput = document.querySelector('#precut-gap-output');
 const outputPreview = document.querySelector('#output-preview');
+const previewContent = document.querySelector('#preview-content');
+const previewResetButton = document.querySelector('#preview-reset');
 const previewPlatform = document.querySelector('.preview-platform');
 const previewActualSizeInput = document.querySelector('#preview-actual-size');
 const previewMaskInput = document.querySelector('#preview-mask');
 const notice = document.querySelector('#notice');
 const generateButton = document.querySelector('#generate-button');
-const generateLabel = document.querySelector('#generate-label');
 const configOutput = document.querySelector('#config-output');
 const configDetail = document.querySelector('#config-detail');
 const configText = document.querySelector('#config-text');
@@ -93,18 +95,13 @@ const state = {
   previewPlatform: 'pc',
   grid: '2x2',
   previewGapRatio: 0.58,
-  previewScale: 1,
+  previewTransform: { scale: 1, x: 0, y: 0 },
+  previewDrag: null,
   precutGapRatio: 0.58,
   crop: null,
   display: null,
   drag: null,
 };
-
-function updateCopyLabel() {
-  generateLabel.textContent = state.image
-    ? '生成配置'
-    : '选择图片后即可生成配置';
-}
 
 function formatBytes(size) {
   if (size < 1024) return `${size} B`;
@@ -115,6 +112,19 @@ function formatBytes(size) {
 function setNotice(message = '', type = 'error') {
   notice.textContent = message;
   notice.classList.toggle('success', type === 'success');
+}
+
+function applyPreviewTransform() {
+  const viewport = previewContent.querySelector('.preview-viewport');
+  if (viewport) {
+    const { scale, x, y } = state.previewTransform;
+    viewport.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+  }
+}
+
+function resetPreviewTransform() {
+  state.previewTransform = { scale: 1, x: 0, y: 0 };
+  applyPreviewTransform();
 }
 
 function isSupported(file) {
@@ -332,10 +342,6 @@ async function chooseFile(file) {
     setNotice('图片内容为空，请换一张图片。');
     return;
   }
-  if (file.size > MAX_BYTES) {
-    setNotice('图片超过 10 MB，请压缩后再上传。');
-    return;
-  }
   setNotice('正在读取图片信息…', 'success');
   await new Promise((resolve) => requestAnimationFrame(resolve));
   let animation;
@@ -388,6 +394,8 @@ async function chooseFile(file) {
     state.maskedFrameCanvas = null;
     state.maskedFrameData = null;
     state.preprocessedFrameData = null;
+    state.previewTransform = { scale: 1, x: 0, y: 0 };
+    state.previewDrag = null;
     fileDetail.textContent =
       `${image.naturalWidth} × ${image.naturalHeight} · ${animation.frameCount} 帧 · ${formatBytes(file.size)}`;
     emptyStage.hidden = true;
@@ -395,7 +403,6 @@ async function chooseFile(file) {
     fileBar.hidden = false;
     generateButton.disabled = false;
     configOutput.hidden = true;
-    updateCopyLabel();
     renderFramePicker();
     resetCrop();
     setNotice();
@@ -634,9 +641,12 @@ function renderOutputPreview() {
     state.previewTimer = null;
   }
   if (!state.image) {
-    outputPreview.innerHTML = '<span>选择图片后显示</span>';
+    outputPreview.classList.remove('preview-ready');
+    previewContent.innerHTML = '<span>选择图片后显示</span>';
+    applyPreviewTransform();
     return;
   }
+  outputPreview.classList.add('preview-ready');
   const { cols, rows } = currentGrid();
   const availableWidth = Math.max(188, outputPreview.clientWidth - 28);
   const {
@@ -650,7 +660,6 @@ function renderOutputPreview() {
     gapRatio: state.previewGapRatio,
     availableWidth,
     actualSize: state.previewActualSize,
-    scale: state.previewScale,
   });
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const tiles = sourceTileRects();
@@ -701,20 +710,19 @@ function renderOutputPreview() {
   const viewport = document.createElement('div');
   viewport.className = 'preview-viewport';
   viewport.append(preview);
-  outputPreview.classList.toggle('actual-size', state.previewActualSize);
-  outputPreview.replaceChildren(viewport);
-  if (state.previewPlatform === 'mobile') {
-    void drawFrame(0);
-  } else if (state.animation.lazy) {
-    void drawFrame(state.selectedFrame);
-  } else if (isAnimated()) {
-    let frameIndex = 0;
+  previewContent.replaceChildren(viewport);
+  applyPreviewTransform();
+  if (isAnimated() && state.previewPlatform !== 'mobile') {
+    let frameIndex = state.selectedFrame;
     const scheduleNextFrame = async () => {
       const frame = await drawFrame(frameIndex);
       if (!frame) return;
       state.previewTimer = setTimeout(() => {
         if (generation !== state.previewGeneration) return;
-        frameIndex = (frameIndex + 1) % state.animation.frameCount;
+        frameIndex = nextPreviewFrameIndex(
+          frameIndex,
+          state.animation.frameCount,
+        );
         void scheduleNextFrame();
       }, frame.delay);
     };
@@ -783,15 +791,11 @@ async function createSignatureConfig() {
     );
   } finally {
     generateButton.disabled = false;
-    updateCopyLabel();
   }
 }
 
 function setGrid(cols, rows) {
   state.grid = `${cols}x${rows}`;
-  const grid = currentGrid();
-  tileCount.textContent = `${grid.cols * grid.rows} 张`;
-  updateCopyLabel();
   if (state.image) resetCrop();
 }
 
@@ -805,7 +809,6 @@ colorMappingInput.addEventListener('change', () => {
   colorMappingInput
     .closest('.switch-control')
     .querySelector('em').textContent = state.colorMapping ? '开启' : '关闭';
-  updateCopyLabel();
   if (state.image) renderOutputPreview();
 });
 mappingGammaInput.addEventListener('input', () => {
@@ -828,12 +831,6 @@ previewPlatform.addEventListener('click', (event) => {
 });
 previewActualSizeInput.addEventListener('change', () => {
   state.previewActualSize = previewActualSizeInput.checked;
-  if (state.image) renderOutputPreview();
-});
-
-previewScaleInput.addEventListener('input', () => {
-  state.previewScale = Number(previewScaleInput.value) / 100;
-  previewScaleOutput.textContent = `${previewScaleInput.value}%`;
   if (state.image) renderOutputPreview();
 });
 
@@ -868,6 +865,53 @@ previewGapRatioInput.addEventListener('input', () => {
   previewGapOutput.textContent = `${previewGapRatioInput.value}%`;
   if (state.image) renderOutputPreview();
 });
+
+outputPreview.addEventListener('wheel', (event) => {
+  if (!state.image) return;
+  event.preventDefault();
+  const bounds = outputPreview.getBoundingClientRect();
+  state.previewTransform = zoomPreviewAtPoint(
+    state.previewTransform,
+    event.deltaY < 0 ? 1.1 : 1 / 1.1,
+    {
+      x: event.clientX - bounds.left - bounds.width / 2,
+      y: event.clientY - bounds.top - bounds.height / 2,
+    },
+  );
+  applyPreviewTransform();
+}, { passive: false });
+
+outputPreview.addEventListener('pointerdown', (event) => {
+  if (!state.image || event.button !== 0 || event.target.closest('#preview-reset')) {
+    return;
+  }
+  outputPreview.setPointerCapture(event.pointerId);
+  state.previewDrag = { x: event.clientX, y: event.clientY };
+  outputPreview.classList.add('dragging');
+});
+
+outputPreview.addEventListener('pointermove', (event) => {
+  if (!state.previewDrag) return;
+  state.previewTransform = movePreview(state.previewTransform, {
+    x: event.clientX - state.previewDrag.x,
+    y: event.clientY - state.previewDrag.y,
+  });
+  state.previewDrag = { x: event.clientX, y: event.clientY };
+  applyPreviewTransform();
+});
+
+function finishPreviewDrag(event) {
+  if (!state.previewDrag) return;
+  state.previewDrag = null;
+  outputPreview.classList.remove('dragging');
+  if (outputPreview.hasPointerCapture(event.pointerId)) {
+    outputPreview.releasePointerCapture(event.pointerId);
+  }
+}
+
+outputPreview.addEventListener('pointerup', finishPreviewDrag);
+outputPreview.addEventListener('pointercancel', finishPreviewDrag);
+previewResetButton.addEventListener('click', resetPreviewTransform);
 
 precutGapRatioInput.addEventListener('input', () => {
   state.precutGapRatio = Number(precutGapRatioInput.value) / 100;

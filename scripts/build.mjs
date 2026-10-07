@@ -34,7 +34,7 @@ const withMetadata = replaceRequired(
   '<meta name="color-scheme" content="light" />',
   `<meta name="color-scheme" content="light" />
     <meta name="use-iframe" content="true" />
-    <meta name="html-box-height-mode" content="viewport" />
+    <meta name="html-box-height-mode" content="auto" />
     <meta name="description" content="飞书签名图片 Buddy：本地处理的网格切图工具" />`,
 );
 const withStyles = replaceRequired(

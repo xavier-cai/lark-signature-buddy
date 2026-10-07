@@ -8,10 +8,9 @@ export function previewLayout({
   gapRatio,
   availableWidth,
   actualSize,
-  scale = 1,
 }) {
   if (actualSize) {
-    const tileSize = LARK_SIGNATURE_TILE_SIZE * scale;
+    const tileSize = LARK_SIGNATURE_TILE_SIZE;
     const gap = Math.round(tileSize * gapRatio);
     return {
       tileSize,
@@ -20,7 +19,7 @@ export function previewLayout({
       height: rows * tileSize + Math.max(0, rows - 1) * gap,
     };
   }
-  const width = Math.min(Math.max(80, availableWidth), 320) * scale;
+  const width = Math.min(Math.max(80, availableWidth), 320);
   const { widthUnits, heightUnits } = compositionUnits(
     cols,
     rows,

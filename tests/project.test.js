@@ -40,7 +40,11 @@ import {
   prepareUploadStaging,
   renderTile,
 } from '../apps/bot/src/tiles.js';
-import { buildTileSpecs } from '@lark-signature-buddy/core/tiles';
+import {
+  buildTileSpecs,
+  MAX_ANIMATED_TILE_RAW_BYTES,
+  MAX_SIGNATURE_TILE_SIZE,
+} from '@lark-signature-buddy/core/tiles';
 import {
   eventBatchKey,
   extractImageKeys,
@@ -56,6 +60,12 @@ import {
   LARK_SIGNATURE_TILE_SIZE,
   previewLayout,
 } from '../apps/web/src/preview-layout.js';
+import {
+  clampPreviewScale,
+  movePreview,
+  nextPreviewFrameIndex,
+  zoomPreviewAtPoint,
+} from '../apps/web/src/preview-transform.js';
 import { mergeRequestState } from '../apps/bot/src/request-state.js';
 import { SerialQueue } from '../apps/bot/src/serial-queue.js';
 import { writeApngFile } from '../apps/bot/src/apng-stream.js';
@@ -378,23 +388,7 @@ test('actual-size preview matches the 28px Lark icon and 44px cycle', () => {
   );
 });
 
-test('preview scale consistently resizes actual and fitted previews', () => {
-  assert.deepEqual(
-    previewLayout({
-      cols: 2,
-      rows: 2,
-      gapRatio: 0.5,
-      availableWidth: 280,
-      actualSize: true,
-      scale: 2,
-    }),
-    {
-      tileSize: 56,
-      gap: 28,
-      width: 140,
-      height: 140,
-    },
-  );
+test('fitted preview uses the available width', () => {
   assert.deepEqual(
     previewLayout({
       cols: 2,
@@ -402,15 +396,37 @@ test('preview scale consistently resizes actual and fitted previews', () => {
       gapRatio: 0.5,
       availableWidth: 280,
       actualSize: false,
-      scale: 0.5,
     }),
     {
-      tileSize: 56,
-      gap: 28,
-      width: 140,
-      height: 140,
+      tileSize: 112,
+      gap: 56,
+      width: 280,
+      height: 280,
     },
   );
+});
+
+test('preview interaction zooms around the pointer and advances animation', () => {
+  assert.equal(clampPreviewScale(0.1), 0.25);
+  assert.equal(clampPreviewScale(4), 3);
+  assert.deepEqual(
+    zoomPreviewAtPoint(
+      { scale: 1, x: 0, y: 0 },
+      2,
+      { x: 30, y: -10 },
+    ),
+    { scale: 2, x: -30, y: 10 },
+  );
+  assert.deepEqual(
+    movePreview(
+      { scale: 2, x: -30, y: 10 },
+      { x: 8, y: -4 },
+    ),
+    { scale: 2, x: -22, y: 6 },
+  );
+  assert.equal(nextPreviewFrameIndex(0, 3), 1);
+  assert.equal(nextPreviewFrameIndex(2, 3), 0);
+  assert.throws(() => nextPreviewFrameIndex(0, 0), /帧数无效/);
 });
 
 test('opens animated images lazily when ImageDecoder is available', async () => {
@@ -803,6 +819,71 @@ test('validates and slices an original image with a separate recipe', async () =
   );
 });
 
+test('accepts a decodable source larger than the former byte limit', async () => {
+  const source = await sharp({
+    create: {
+      width: 80,
+      height: 100,
+      channels: 4,
+      background: '#4f70d8',
+    },
+  })
+    .png()
+    .toBuffer();
+  const paddedSource = Buffer.concat([
+    source,
+    Buffer.alloc(20 * 1024 * 1024),
+  ]);
+  assert.ok(paddedSource.length > 20 * 1024 * 1024);
+  const image = await inspectSourceImage(paddedSource, recipe);
+  assert.equal(image.width, 80);
+  assert.equal(image.height, 100);
+});
+
+test('downscales large signature tiles to the display-size ceiling', async () => {
+  const largeRecipe = createSignatureRecipe({
+    sourceWidth: 400,
+    sourceHeight: 200,
+    sourceFrames: 1,
+    cols: 1,
+    rows: 1,
+    crop: { x: 0, y: 0, width: 1, height: 1 },
+    mode: 'plain',
+    gapRatio: 0.58,
+    colorMapping: false,
+    outputSize: 512,
+    contentRect: { x: 0, y: 0, width: 1, height: 1 },
+  });
+  const source = await sharp({
+    create: {
+      width: 400,
+      height: 200,
+      channels: 4,
+      background: '#4f70d8',
+    },
+  })
+    .png()
+    .toBuffer();
+  const [spec] = buildTileSpecs(largeRecipe, {
+    width: 400,
+    height: 200,
+  });
+  assert.equal(spec.outputWidth, MAX_SIGNATURE_TILE_SIZE);
+  assert.equal(spec.outputHeight, 25);
+
+  for (const colorMapping of [false, true]) {
+    const tile = await renderTile(source, spec, {
+      pages: 1,
+      colorMapping,
+      colorMappingGamma: 1,
+    });
+    const metadata = await sharp(tile).metadata();
+    assert.equal(metadata.width, MAX_SIGNATURE_TILE_SIZE);
+    assert.equal(metadata.height, 25);
+    assert.ok(tile.length < 10 * 1024 * 1024);
+  }
+});
+
 test('uploads rendered tiles concurrently while preserving result order', async () => {
   const source = await sharp({
     create: {
@@ -920,6 +1001,78 @@ test('preserves animation frames, delays, loop, and alpha in APNG tiles', async 
   assert.equal(decodedTile.loop, 0);
   assert.ok(decodedTile.frames[0].data.some((value, index) =>
     index % 4 === 3 && value > 0 && value < 255));
+});
+
+test('downscales animated signature tiles before APNG encoding', async () => {
+  const animatedRecipe = createSignatureRecipe({
+    sourceWidth: 160,
+    sourceHeight: 80,
+    sourceFrames: 2,
+    cols: 1,
+    rows: 1,
+    crop: { x: 0, y: 0, width: 1, height: 1 },
+    mode: 'plain',
+    gapRatio: 0.58,
+    colorMapping: true,
+    outputSize: 512,
+    contentRect: { x: 0, y: 0, width: 1, height: 1 },
+  });
+  const frames = [64, 192].map((alpha) => {
+    const data = new Uint8ClampedArray(160 * 80 * 4);
+    for (let index = 0; index < data.length; index += 4) {
+      data[index] = 80;
+      data[index + 1] = 120;
+      data[index + 2] = 220;
+      data[index + 3] = alpha;
+    }
+    return { data, delay: 100 };
+  });
+  const sourceBlob = await encodeGifFrames({
+    width: 160,
+    height: 80,
+    frames,
+    loop: 0,
+  });
+  const source = Buffer.from(await sourceBlob.arrayBuffer());
+  const image = await inspectSourceImage(source, animatedRecipe);
+  const [spec] = buildTileSpecs(animatedRecipe, image);
+  const tile = await renderTile(source, spec, {
+    ...image,
+    colorMapping: true,
+    colorMappingGamma: 1,
+  });
+  const decoded = await decodeImageBytes(tile, 'image/apng');
+  assert.equal(decoded.width, MAX_SIGNATURE_TILE_SIZE);
+  assert.equal(decoded.height, 25);
+  assert.equal(decoded.frames.length, 2);
+  assert.ok(tile.length < 10 * 1024 * 1024);
+});
+
+test('reduces long animations against the upload byte budget', () => {
+  const longAnimationRecipe = createSignatureRecipe({
+    sourceWidth: 100,
+    sourceHeight: 100,
+    sourceFrames: 10000,
+    cols: 1,
+    rows: 1,
+    crop: { x: 0, y: 0, width: 1, height: 1 },
+    mode: 'plain',
+    gapRatio: 0.58,
+    colorMapping: false,
+    outputSize: 512,
+    contentRect: { x: 0, y: 0, width: 1, height: 1 },
+  });
+  const [spec] = buildTileSpecs(longAnimationRecipe, {
+    width: 100,
+    height: 100,
+    pages: 10000,
+  });
+  assert.ok(spec.outputWidth < MAX_SIGNATURE_TILE_SIZE);
+  assert.ok(spec.outputHeight < MAX_SIGNATURE_TILE_SIZE);
+  assert.ok(
+    spec.outputWidth * spec.outputHeight * 4 * 10000 <=
+      MAX_ANIMATED_TILE_RAW_BYTES,
+  );
 });
 
 test('browser APNG codec preserves RGBA, frame count, delays, and loop', async () => {

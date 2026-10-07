@@ -62,6 +62,10 @@ async function renderAnimationFrame(
       width: spec.width,
       height: spec.height,
     })
+    .resize(spec.outputWidth, spec.outputHeight, {
+      fit: 'fill',
+      kernel: sharp.kernel.lanczos3,
+    })
     .raw()
     .toBuffer();
   const rgba = new Uint8ClampedArray(
@@ -110,6 +114,10 @@ export async function renderTile(input, spec, animation = {}) {
       top: spec.top,
       width: spec.width,
       height: spec.height,
+    })
+    .resize(spec.outputWidth, spec.outputHeight, {
+      fit: 'fill',
+      kernel: sharp.kernel.lanczos3,
     });
   if (animation.colorMapping) {
     const { data } = await pipeline

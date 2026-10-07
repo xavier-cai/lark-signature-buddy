@@ -109,18 +109,21 @@ Optional environment variables:
 | --- | --- | --- |
 | `LARK_SIGNATURE_BUDDY_PROFILE` | `lark-signature-buddy` | `lark-cli` profile |
 | `LARK_SIGNATURE_BUDDY_REQUEST_TTL_MS` | `600000` | Partial request lifetime |
+| `LARK_SIGNATURE_BUDDY_LARK_CLI` | resolved from `PATH` | `lark-cli` executable |
 
-The provided user-service template assumes this repository lives at
-`~/workspace/opensource/lark-signature-buddy`:
+Install a systemd user service from any clone location. The installer resolves
+the current repository, Node.js, and `lark-cli` paths and writes a generated
+unit under the current user's systemd configuration:
 
 ```bash
-mkdir -p ~/.config/systemd/user
-ln -sfn \
-  "$PWD/deploy/systemd/lark-signature-buddy.service" \
-  ~/.config/systemd/user/lark-signature-buddy.service
-systemctl --user daemon-reload
-systemctl --user enable --now lark-signature-buddy.service
+npm run service:install -- --profile lark-signature-buddy
 ```
+
+Use `--service-name`, `--request-ttl-ms`, `--node`, or `--lark-cli` to
+override detected values. `--print` previews the generated unit without
+writing anything; `--no-start` installs it without enabling or starting it.
+The checked-in `.service.in` file is only a placeholder template and does not
+contain machine-specific paths or profile names.
 
 ## GitHub Pages
 

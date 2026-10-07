@@ -1,0 +1,19 @@
+[Unit]
+Description=Lark Signature Buddy bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKING_DIRECTORY@
+Environment=@PROFILE_ENVIRONMENT@
+Environment=@REQUEST_TTL_ENVIRONMENT@
+Environment=@LARK_CLI_ENVIRONMENT@
+ExecStart=@NODE_EXECUTABLE@ @BOT_ENTRYPOINT@
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

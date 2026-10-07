@@ -33,8 +33,9 @@
     "security:audit:remote": "bash scripts/audit-remote-refs.sh",
     "security:hooks": "bash scripts/install-hooks.sh",
     "security:install": "bash scripts/install-security-tools.sh",
+    "service:install": "bash deploy/systemd/install.sh",
     "start:bot": "node apps/bot/src/main.js",
-    "test": "node --test tests/build.test.js tests/project.test.js tests/security-gate.test.js"
+    "test": "node --test tests/build.test.js tests/deploy.test.js tests/project.test.js tests/security-gate.test.js"
   },
   "engines": {
     "node": ">=22"

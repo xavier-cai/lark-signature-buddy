@@ -25,6 +25,8 @@ import {
 
 const PROFILE =
   process.env.LARK_SIGNATURE_BUDDY_PROFILE || 'lark-signature-buddy';
+const LARK_CLI =
+  process.env.LARK_SIGNATURE_BUDDY_LARK_CLI || 'lark-cli';
 const DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = Number.parseInt(
   process.env.LARK_SIGNATURE_BUDDY_REQUEST_TTL_MS || '600000',
@@ -49,7 +51,7 @@ function log(level, message, detail = {}) {
 
 function runLark(args) {
   return new Promise((resolve, reject) => {
-    const child = spawn('lark-cli', args, {
+    const child = spawn(LARK_CLI, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
@@ -227,7 +229,7 @@ function cleanupSeen() {
 }
 
 const consumer = spawn(
-  'lark-cli',
+  LARK_CLI,
   [
     'event',
     'consume',

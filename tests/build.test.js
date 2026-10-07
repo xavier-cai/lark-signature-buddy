@@ -25,6 +25,29 @@ test('build creates a self-contained static application', async () => {
   assert.equal(output.match(/<\/script>/g)?.length, 1);
   assert.equal(output.match(/<style>/g)?.length, 1);
   assert.doesNotMatch(output, /href="\.\/styles\.css"/);
+  assert.match(
+    output,
+    /<meta name="html-box-height-mode" content="auto" \/>/,
+  );
+  assert.doesNotMatch(
+    output,
+    /<meta name="html-box-height-mode" content="viewport" \/>/,
+  );
+  assert.match(
+    output,
+    /grid-template-columns:\s*minmax\(0,\s*1\.55fr\)\s+minmax\(300px,\s*0\.75fr\)/,
+  );
+  assert.match(output, /@media\s*\(max-width:\s*720px\)/);
+  assert.doesNotMatch(output, /@media\s*\(max-width:\s*860px\)/);
+  assert.match(
+    output,
+    /min-height:\s*clamp\(350px,\s*43vw,\s*510px\)/,
+  );
+  assert.match(output, /@media\s*\(max-width:\s*900px\)/);
+  assert.match(
+    output,
+    /\.section-heading\.compact\s*\{[^}]*flex-direction:\s*column/s,
+  );
   assert.match(output, /id="frame-picker"/);
   assert.match(output, /frame-picker-track/);
   assert.match(output, /ImageDecoder/);
@@ -44,12 +67,13 @@ test('build creates a self-contained static application', async () => {
   assert.match(output, /id="mapping-gamma-output">1\.00/);
   assert.match(output, /id="grid-cols"[^>]*max="13"/);
   assert.match(output, /id="grid-rows"[^>]*max="5"/);
-  assert.match(output, /id="preview-gap-ratio"[^>]*value="58"/);
   assert.match(
     output,
-    /id="preview-scale"[^>]*min="25"[^>]*max="300"[^>]*step="25"[^>]*value="100"/,
+    /\.grid-control-row input\s*\{[^}]*text-align:\s*center/s,
   );
-  assert.match(output, /id="preview-scale-output">100%/);
+  assert.doesNotMatch(output, /id="tile-count"|最大 10 MB|超过 10 MB/);
+  assert.match(output, /id="preview-gap-ratio"[^>]*value="58"/);
+  assert.doesNotMatch(output, /id="preview-scale"|预览缩放/);
   assert.match(output, /id="precut-gap-ratio"[^>]*value="58"/);
   assert.ok(
     output.indexOf('id="precut-gap-ratio"') <
@@ -72,16 +96,28 @@ test('build creates a self-contained static application', async () => {
   assert.match(output, /id="preview-mask"/);
   assert.match(output, /data-platform="pc"[^>]*>PC</);
   assert.match(output, /data-platform="mobile"[^>]*>Mobile</);
-  assert.match(output, /previewPlatform==="mobile"/);
   assert.match(output, /id="preview-actual-size"[^>]*checked/);
   assert.match(output, />实际大小</);
-  assert.match(output, /\.output-preview\.actual-size/);
+  assert.match(output, /class="preview-content" id="preview-content"/);
   assert.match(output, /preview-viewport/);
+  assert.match(output, /\.output-preview\.preview-ready/);
+  assert.match(output, /id="preview-reset"[^>]*type="button"/);
+  assert.doesNotMatch(output, /id="preview-reset"[^>]*disabled/);
+  assert.match(output, />\s*复位\s*<\/button>/);
+  assert.match(output, /addEventListener\("wheel"/);
+  assert.match(output, /addEventListener\("pointerdown"/);
+  assert.doesNotMatch(output, /\.preview-reset:disabled/);
+  assert.doesNotMatch(output, /state\.animation\.lazy/);
+  assert.match(output, /previewPlatform!=="mobile"/);
   assert.match(output, />遮罩</);
   assert.doesNotMatch(output, /最终组合效果|动图预览/);
   assert.match(output, /3370ff/i);
   assert.match(output, /id="config-text"/);
-  assert.match(output, /选择图片后即可生成配置/);
+  assert.match(
+    output,
+    /id="generate-button"[^>]*disabled>\s*<span>生成配置<\/span>/,
+  );
+  assert.doesNotMatch(output, /id="generate-label"|选择图片后即可生成配置/);
   assert.doesNotMatch(output, /生成配置字符串/);
   assert.doesNotMatch(output, /拖动网格定位/);
   assert.doesNotMatch(output, /id="file-name"/);

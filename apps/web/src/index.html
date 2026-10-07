@@ -24,7 +24,7 @@
             </span>
             <strong>拖入图片，或点击选择</strong>
             <span>也可以粘贴剪贴板图片</span>
-            <small>JPG · PNG/APNG · WEBP · GIF · BMP · ICO · TIFF · HEIC，最大 10 MB</small>
+            <small>JPG · PNG/APNG · WEBP · GIF · BMP · ICO · TIFF · HEIC</small>
           </button>
 
           <div class="canvas-stage" id="canvas-stage" hidden>
@@ -57,22 +57,18 @@
         </div>
 
         <aside class="control-panel">
-          <section class="control-section">
-            <div class="section-heading">
-              <div>
+          <section class="control-section grid-section">
+            <div class="grid-control-row">
+              <div class="grid-heading">
                 <p class="step-label">网格</p>
-                <h2>输入切图规格</h2>
               </div>
-              <span class="tile-count" id="tile-count">4 张</span>
-            </div>
-            <div class="grid-inputs">
               <label>
-                <span>列数</span>
+                <span>列</span>
                 <input id="grid-cols" type="number" min="1" max="13" value="2" inputmode="numeric" />
               </label>
               <span class="grid-times" aria-hidden="true">×</span>
               <label>
-                <span>行数</span>
+                <span>行</span>
                 <input id="grid-rows" type="number" min="1" max="5" value="2" inputmode="numeric" />
               </label>
             </div>
@@ -119,13 +115,6 @@
                   </div>
                   <input id="preview-gap-ratio" type="range" min="0" max="100" value="58" />
                 </div>
-                <div class="gap-control preview-scale-control">
-                  <div class="range-heading">
-                    <label for="preview-scale">预览缩放</label>
-                    <output id="preview-scale-output">100%</output>
-                  </div>
-                  <input id="preview-scale" type="range" min="25" max="300" step="25" value="100" />
-                </div>
               </section>
             </div>
           </details>
@@ -150,14 +139,23 @@
                 </label>
               </div>
             </div>
-            <div class="output-preview" id="output-preview">
-              <span>选择图片后显示</span>
+            <div
+              class="output-preview"
+              id="output-preview"
+              title="滚轮缩放，按住左键拖动"
+            >
+              <div class="preview-content" id="preview-content">
+                <span>选择图片后显示</span>
+              </div>
+              <button class="preview-reset" id="preview-reset" type="button">
+                复位
+              </button>
             </div>
           </section>
 
           <div class="notice" id="notice" role="status" aria-live="polite"></div>
           <button class="generate-button" id="generate-button" type="button" disabled>
-            <span id="generate-label">选择图片后即可生成配置</span>
+            <span>生成配置</span>
           </button>
           <section class="config-output" id="config-output" hidden>
             <div>

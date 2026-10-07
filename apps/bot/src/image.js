@@ -23,7 +23,6 @@ import {
 } from '@lark-signature-buddy/core/image-format';
 import { validateAnimationWork } from '@lark-signature-buddy/core/transport';
 
-const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_IMAGE_PIXELS = 80 * 1024 * 1024;
 const DOWNLOAD_STAGING_NAME = '.lark-signature-buddy-downloads';
 
@@ -79,7 +78,6 @@ async function decodeAnimatedWebp(bytes) {
 
 export async function inspectSourceImage(input, recipe) {
   if (!input || input.length === 0) throw new Error('下载的图片为空');
-  if (input.length > MAX_IMAGE_BYTES) throw new Error('图片超过 20 MB 处理上限');
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   const kind = detectImageKind(bytes);
   const animation = kind.animated
