@@ -5,6 +5,8 @@ import {
 } from './grid.js';
 
 export const MAX_TILES = MAX_GRID_COLS * MAX_GRID_ROWS;
+export const MAX_SIGNATURE_TILE_SIZE = 50;
+export const MAX_ANIMATED_TILE_RAW_BYTES = 8 * 1024 * 1024;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -28,6 +30,28 @@ function toPixelRect(rect, imageWidth, imageHeight) {
     top,
     width: right - left,
     height: bottom - top,
+  };
+}
+
+function fitOutputSize(width, height, frames) {
+  const frameCount =
+    Number.isInteger(frames) && frames > 0 ? frames : 1;
+  const maxPixelsPerFrame = Math.max(
+    1,
+    Math.floor(MAX_ANIMATED_TILE_RAW_BYTES / 4 / frameCount),
+  );
+  const maxEdgeFromBudget = Math.max(
+    1,
+    Math.floor(Math.sqrt(maxPixelsPerFrame)),
+  );
+  const scale = Math.min(
+    1,
+    Math.min(MAX_SIGNATURE_TILE_SIZE, maxEdgeFromBudget) /
+      Math.max(width, height),
+  );
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
   };
 }
 
@@ -68,6 +92,11 @@ export function buildTileSpecs(recipe, sourceImage) {
 
   return normalizedTiles.map((tile, index) => {
     const relative = toPixelRect(tile, source.width, source.height);
+    const output = fitOutputSize(
+      relative.width,
+      relative.height,
+      sourceImage.pages,
+    );
     return {
       index,
       row: tile.row,
@@ -76,10 +105,10 @@ export function buildTileSpecs(recipe, sourceImage) {
       top: source.top + relative.top,
       width: relative.width,
       height: relative.height,
-      // V1 recipes carry a legacy square output size. Preserve source pixels
-      // instead: enlarging every crop made small animated tiles enormous.
-      outputWidth: relative.width,
-      outputHeight: relative.height,
+      // Signature tiles render at 28 px in Lark. Keep enough source detail for
+      // high-DPI clients without uploading the full crop resolution.
+      outputWidth: output.width,
+      outputHeight: output.height,
     };
   });
 }

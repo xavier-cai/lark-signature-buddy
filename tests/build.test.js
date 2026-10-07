@@ -67,6 +67,7 @@ test('build creates a self-contained static application', async () => {
   assert.match(output, /id="mapping-gamma-output">1\.00/);
   assert.match(output, /id="grid-cols"[^>]*max="13"/);
   assert.match(output, /id="grid-rows"[^>]*max="5"/);
+  assert.doesNotMatch(output, /id="tile-count"|最大 10 MB|超过 10 MB/);
   assert.match(output, /id="preview-gap-ratio"[^>]*value="58"/);
   assert.match(
     output,

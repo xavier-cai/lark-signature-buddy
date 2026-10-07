@@ -40,7 +40,11 @@ import {
   prepareUploadStaging,
   renderTile,
 } from '../apps/bot/src/tiles.js';
-import { buildTileSpecs } from '@lark-signature-buddy/core/tiles';
+import {
+  buildTileSpecs,
+  MAX_ANIMATED_TILE_RAW_BYTES,
+  MAX_SIGNATURE_TILE_SIZE,
+} from '@lark-signature-buddy/core/tiles';
 import {
   eventBatchKey,
   extractImageKeys,
@@ -803,6 +807,50 @@ test('validates and slices an original image with a separate recipe', async () =
   );
 });
 
+test('downscales large signature tiles to the display-size ceiling', async () => {
+  const largeRecipe = createSignatureRecipe({
+    sourceWidth: 400,
+    sourceHeight: 200,
+    sourceFrames: 1,
+    cols: 1,
+    rows: 1,
+    crop: { x: 0, y: 0, width: 1, height: 1 },
+    mode: 'plain',
+    gapRatio: 0.58,
+    colorMapping: false,
+    outputSize: 512,
+    contentRect: { x: 0, y: 0, width: 1, height: 1 },
+  });
+  const source = await sharp({
+    create: {
+      width: 400,
+      height: 200,
+      channels: 4,
+      background: '#4f70d8',
+    },
+  })
+    .png()
+    .toBuffer();
+  const [spec] = buildTileSpecs(largeRecipe, {
+    width: 400,
+    height: 200,
+  });
+  assert.equal(spec.outputWidth, MAX_SIGNATURE_TILE_SIZE);
+  assert.equal(spec.outputHeight, 25);
+
+  for (const colorMapping of [false, true]) {
+    const tile = await renderTile(source, spec, {
+      pages: 1,
+      colorMapping,
+      colorMappingGamma: 1,
+    });
+    const metadata = await sharp(tile).metadata();
+    assert.equal(metadata.width, MAX_SIGNATURE_TILE_SIZE);
+    assert.equal(metadata.height, 25);
+    assert.ok(tile.length < 10 * 1024 * 1024);
+  }
+});
+
 test('uploads rendered tiles concurrently while preserving result order', async () => {
   const source = await sharp({
     create: {
@@ -920,6 +968,78 @@ test('preserves animation frames, delays, loop, and alpha in APNG tiles', async 
   assert.equal(decodedTile.loop, 0);
   assert.ok(decodedTile.frames[0].data.some((value, index) =>
     index % 4 === 3 && value > 0 && value < 255));
+});
+
+test('downscales animated signature tiles before APNG encoding', async () => {
+  const animatedRecipe = createSignatureRecipe({
+    sourceWidth: 160,
+    sourceHeight: 80,
+    sourceFrames: 2,
+    cols: 1,
+    rows: 1,
+    crop: { x: 0, y: 0, width: 1, height: 1 },
+    mode: 'plain',
+    gapRatio: 0.58,
+    colorMapping: true,
+    outputSize: 512,
+    contentRect: { x: 0, y: 0, width: 1, height: 1 },
+  });
+  const frames = [64, 192].map((alpha) => {
+    const data = new Uint8ClampedArray(160 * 80 * 4);
+    for (let index = 0; index < data.length; index += 4) {
+      data[index] = 80;
+      data[index + 1] = 120;
+      data[index + 2] = 220;
+      data[index + 3] = alpha;
+    }
+    return { data, delay: 100 };
+  });
+  const sourceBlob = await encodeGifFrames({
+    width: 160,
+    height: 80,
+    frames,
+    loop: 0,
+  });
+  const source = Buffer.from(await sourceBlob.arrayBuffer());
+  const image = await inspectSourceImage(source, animatedRecipe);
+  const [spec] = buildTileSpecs(animatedRecipe, image);
+  const tile = await renderTile(source, spec, {
+    ...image,
+    colorMapping: true,
+    colorMappingGamma: 1,
+  });
+  const decoded = await decodeImageBytes(tile, 'image/apng');
+  assert.equal(decoded.width, MAX_SIGNATURE_TILE_SIZE);
+  assert.equal(decoded.height, 25);
+  assert.equal(decoded.frames.length, 2);
+  assert.ok(tile.length < 10 * 1024 * 1024);
+});
+
+test('reduces long animations against the upload byte budget', () => {
+  const longAnimationRecipe = createSignatureRecipe({
+    sourceWidth: 100,
+    sourceHeight: 100,
+    sourceFrames: 10000,
+    cols: 1,
+    rows: 1,
+    crop: { x: 0, y: 0, width: 1, height: 1 },
+    mode: 'plain',
+    gapRatio: 0.58,
+    colorMapping: false,
+    outputSize: 512,
+    contentRect: { x: 0, y: 0, width: 1, height: 1 },
+  });
+  const [spec] = buildTileSpecs(longAnimationRecipe, {
+    width: 100,
+    height: 100,
+    pages: 10000,
+  });
+  assert.ok(spec.outputWidth < MAX_SIGNATURE_TILE_SIZE);
+  assert.ok(spec.outputHeight < MAX_SIGNATURE_TILE_SIZE);
+  assert.ok(
+    spec.outputWidth * spec.outputHeight * 4 * 10000 <=
+      MAX_ANIMATED_TILE_RAW_BYTES,
+  );
 });
 
 test('browser APNG codec preserves RGBA, frame count, delays, and loop', async () => {

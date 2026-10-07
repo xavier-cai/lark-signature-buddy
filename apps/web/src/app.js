@@ -28,10 +28,9 @@ import {
 } from './frame-window.js';
 import { previewLayout } from './preview-layout.js';
 
-const MAX_BYTES = 10 * 1024 * 1024;
 const HANDLE_RADIUS = 9;
-// Kept in the V1 recipe for wire compatibility. The bot emits native-size
-// tiles so a small source crop is never enlarged before upload.
+// Kept in the V1 recipe for wire compatibility. The bot derives the actual
+// output dimensions from each crop and caps its longest edge at 50 px.
 const LEGACY_OUTPUT_SIZE = 512;
 const uploadButton = document.querySelector('#upload-button');
 const fileInput = document.querySelector('#file-input');
@@ -44,7 +43,6 @@ const fileDetail = document.querySelector('#file-detail');
 const resetGridButton = document.querySelector('#reset-grid');
 const gridColsInput = document.querySelector('#grid-cols');
 const gridRowsInput = document.querySelector('#grid-rows');
-const tileCount = document.querySelector('#tile-count');
 const frameSection = document.querySelector('#frame-section');
 const frameCount = document.querySelector('#frame-count');
 const framePicker = document.querySelector('#frame-picker');
@@ -323,10 +321,6 @@ async function chooseFile(file) {
   }
   if (file.size === 0) {
     setNotice('图片内容为空，请换一张图片。');
-    return;
-  }
-  if (file.size > MAX_BYTES) {
-    setNotice('图片超过 10 MB，请压缩后再上传。');
     return;
   }
   setNotice('正在读取图片信息…', 'success');
@@ -780,8 +774,6 @@ async function createSignatureConfig() {
 
 function setGrid(cols, rows) {
   state.grid = `${cols}x${rows}`;
-  const grid = currentGrid();
-  tileCount.textContent = `${grid.cols * grid.rows} 张`;
   if (state.image) resetCrop();
 }
 
