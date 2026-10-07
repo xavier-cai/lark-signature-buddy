@@ -64,8 +64,8 @@ h2 {
 
 .editor-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(330px, 0.75fr);
-  gap: 19px;
+  grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.75fr);
+  gap: clamp(14px, 1.6vw, 19px);
   align-items: stretch;
 }
 
@@ -86,7 +86,7 @@ h2 {
 .empty-stage,
 .canvas-stage {
   width: 100%;
-  min-height: 550px;
+  min-height: clamp(380px, 46vw, 550px);
   border-radius: 16px;
 }
 
@@ -147,7 +147,7 @@ h2 {
   display: block;
   width: 100%;
   height: auto;
-  max-height: 550px;
+  max-height: clamp(380px, 46vw, 550px);
   touch-action: none;
 }
 
@@ -916,7 +916,19 @@ h2 {
   opacity: 0.45;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 900px) {
+  .section-heading.compact {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .preview-controls {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
   .shell {
     width: min(100% - 22px, 680px);
     padding-top: 24px;

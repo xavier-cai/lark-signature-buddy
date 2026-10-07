@@ -25,6 +25,29 @@ test('build creates a self-contained static application', async () => {
   assert.equal(output.match(/<\/script>/g)?.length, 1);
   assert.equal(output.match(/<style>/g)?.length, 1);
   assert.doesNotMatch(output, /href="\.\/styles\.css"/);
+  assert.match(
+    output,
+    /<meta name="html-box-height-mode" content="auto" \/>/,
+  );
+  assert.doesNotMatch(
+    output,
+    /<meta name="html-box-height-mode" content="viewport" \/>/,
+  );
+  assert.match(
+    output,
+    /grid-template-columns:\s*minmax\(0,\s*1\.55fr\)\s+minmax\(300px,\s*0\.75fr\)/,
+  );
+  assert.match(output, /@media\s*\(max-width:\s*720px\)/);
+  assert.doesNotMatch(output, /@media\s*\(max-width:\s*860px\)/);
+  assert.match(
+    output,
+    /min-height:\s*clamp\(380px,\s*46vw,\s*550px\)/,
+  );
+  assert.match(output, /@media\s*\(max-width:\s*900px\)/);
+  assert.match(
+    output,
+    /\.section-heading\.compact\s*\{[^}]*flex-direction:\s*column/s,
+  );
   assert.match(output, /id="frame-picker"/);
   assert.match(output, /frame-picker-track/);
   assert.match(output, /ImageDecoder/);
