@@ -62,8 +62,8 @@ import {
 } from '../apps/web/src/preview-layout.js';
 import {
   clampPreviewScale,
-  isPreviewTransformReset,
   movePreview,
+  nextPreviewFrameIndex,
   zoomPreviewAtPoint,
 } from '../apps/web/src/preview-transform.js';
 import { mergeRequestState } from '../apps/bot/src/request-state.js';
@@ -406,7 +406,7 @@ test('fitted preview uses the available width', () => {
   );
 });
 
-test('preview interaction zooms around the pointer and supports reset state', () => {
+test('preview interaction zooms around the pointer and advances animation', () => {
   assert.equal(clampPreviewScale(0.1), 0.25);
   assert.equal(clampPreviewScale(4), 3);
   assert.deepEqual(
@@ -424,14 +424,9 @@ test('preview interaction zooms around the pointer and supports reset state', ()
     ),
     { scale: 2, x: -22, y: 6 },
   );
-  assert.equal(
-    isPreviewTransformReset({ scale: 1, x: 0, y: 0 }),
-    true,
-  );
-  assert.equal(
-    isPreviewTransformReset({ scale: 1.1, x: 0, y: 0 }),
-    false,
-  );
+  assert.equal(nextPreviewFrameIndex(0, 3), 1);
+  assert.equal(nextPreviewFrameIndex(2, 3), 0);
+  assert.throws(() => nextPreviewFrameIndex(0, 0), /帧数无效/);
 });
 
 test('opens animated images lazily when ImageDecoder is available', async () => {

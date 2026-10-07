@@ -67,6 +67,10 @@ test('build creates a self-contained static application', async () => {
   assert.match(output, /id="mapping-gamma-output">1\.00/);
   assert.match(output, /id="grid-cols"[^>]*max="13"/);
   assert.match(output, /id="grid-rows"[^>]*max="5"/);
+  assert.match(
+    output,
+    /\.grid-control-row input\s*\{[^}]*text-align:\s*center/s,
+  );
   assert.doesNotMatch(output, /id="tile-count"|最大 10 MB|超过 10 MB/);
   assert.match(output, /id="preview-gap-ratio"[^>]*value="58"/);
   assert.doesNotMatch(output, /id="preview-scale"|预览缩放/);
@@ -92,16 +96,21 @@ test('build creates a self-contained static application', async () => {
   assert.match(output, /id="preview-mask"/);
   assert.match(output, /data-platform="pc"[^>]*>PC</);
   assert.match(output, /data-platform="mobile"[^>]*>Mobile</);
-  assert.match(output, /previewPlatform==="mobile"/);
   assert.match(output, /id="preview-actual-size"[^>]*checked/);
   assert.match(output, />实际大小</);
   assert.match(output, /class="preview-content" id="preview-content"/);
   assert.match(output, /preview-viewport/);
   assert.match(output, /\.output-preview\.preview-ready/);
-  assert.match(output, /id="preview-reset"[^>]*disabled/);
+  assert.match(output, /id="preview-reset"[^>]*type="button"/);
+  assert.doesNotMatch(output, /id="preview-reset"[^>]*disabled/);
   assert.match(output, />\s*复位\s*<\/button>/);
   assert.match(output, /addEventListener\("wheel"/);
   assert.match(output, /addEventListener\("pointerdown"/);
+  assert.doesNotMatch(output, /\.preview-reset:disabled/);
+  assert.doesNotMatch(
+    output,
+    /state\.animation\.lazy|state\.previewPlatform === 'mobile'/,
+  );
   assert.match(output, />遮罩</);
   assert.doesNotMatch(output, /最终组合效果|动图预览/);
   assert.match(output, /3370ff/i);

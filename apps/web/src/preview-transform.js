@@ -23,6 +23,9 @@ export function movePreview(transform, delta) {
   };
 }
 
-export function isPreviewTransformReset(transform) {
-  return transform.scale === 1 && transform.x === 0 && transform.y === 0;
+export function nextPreviewFrameIndex(index, frameCount) {
+  if (!Number.isInteger(frameCount) || frameCount < 1) {
+    throw new Error('预览动图帧数无效');
+  }
+  return (index + 1) % frameCount;
 }

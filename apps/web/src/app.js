@@ -28,8 +28,8 @@ import {
 } from './frame-window.js';
 import { previewLayout } from './preview-layout.js';
 import {
-  isPreviewTransformReset,
   movePreview,
+  nextPreviewFrameIndex,
   zoomPreviewAtPoint,
 } from './preview-transform.js';
 
@@ -120,8 +120,6 @@ function applyPreviewTransform() {
     const { scale, x, y } = state.previewTransform;
     viewport.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
   }
-  previewResetButton.disabled =
-    !state.image || isPreviewTransformReset(state.previewTransform);
 }
 
 function resetPreviewTransform() {
@@ -714,18 +712,17 @@ function renderOutputPreview() {
   viewport.append(preview);
   previewContent.replaceChildren(viewport);
   applyPreviewTransform();
-  if (state.previewPlatform === 'mobile') {
-    void drawFrame(0);
-  } else if (state.animation.lazy) {
-    void drawFrame(state.selectedFrame);
-  } else if (isAnimated()) {
-    let frameIndex = 0;
+  if (isAnimated()) {
+    let frameIndex = state.selectedFrame;
     const scheduleNextFrame = async () => {
       const frame = await drawFrame(frameIndex);
       if (!frame) return;
       state.previewTimer = setTimeout(() => {
         if (generation !== state.previewGeneration) return;
-        frameIndex = (frameIndex + 1) % state.animation.frameCount;
+        frameIndex = nextPreviewFrameIndex(
+          frameIndex,
+          state.animation.frameCount,
+        );
         void scheduleNextFrame();
       }, frame.delay);
     };
