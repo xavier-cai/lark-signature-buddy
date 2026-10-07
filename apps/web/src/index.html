@@ -115,13 +115,6 @@
                   </div>
                   <input id="preview-gap-ratio" type="range" min="0" max="100" value="58" />
                 </div>
-                <div class="gap-control preview-scale-control">
-                  <div class="range-heading">
-                    <label for="preview-scale">预览缩放</label>
-                    <output id="preview-scale-output">100%</output>
-                  </div>
-                  <input id="preview-scale" type="range" min="25" max="300" step="25" value="100" />
-                </div>
               </section>
             </div>
           </details>
@@ -146,8 +139,17 @@
                 </label>
               </div>
             </div>
-            <div class="output-preview" id="output-preview">
-              <span>选择图片后显示</span>
+            <div
+              class="output-preview"
+              id="output-preview"
+              title="滚轮缩放，按住左键拖动"
+            >
+              <div class="preview-content" id="preview-content">
+                <span>选择图片后显示</span>
+              </div>
+              <button class="preview-reset" id="preview-reset" type="button" disabled>
+                复位
+              </button>
             </div>
           </section>
 

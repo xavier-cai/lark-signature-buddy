@@ -60,6 +60,12 @@ import {
   LARK_SIGNATURE_TILE_SIZE,
   previewLayout,
 } from '../apps/web/src/preview-layout.js';
+import {
+  clampPreviewScale,
+  isPreviewTransformReset,
+  movePreview,
+  zoomPreviewAtPoint,
+} from '../apps/web/src/preview-transform.js';
 import { mergeRequestState } from '../apps/bot/src/request-state.js';
 import { SerialQueue } from '../apps/bot/src/serial-queue.js';
 import { writeApngFile } from '../apps/bot/src/apng-stream.js';
@@ -382,23 +388,7 @@ test('actual-size preview matches the 28px Lark icon and 44px cycle', () => {
   );
 });
 
-test('preview scale consistently resizes actual and fitted previews', () => {
-  assert.deepEqual(
-    previewLayout({
-      cols: 2,
-      rows: 2,
-      gapRatio: 0.5,
-      availableWidth: 280,
-      actualSize: true,
-      scale: 2,
-    }),
-    {
-      tileSize: 56,
-      gap: 28,
-      width: 140,
-      height: 140,
-    },
-  );
+test('fitted preview uses the available width', () => {
   assert.deepEqual(
     previewLayout({
       cols: 2,
@@ -406,14 +396,41 @@ test('preview scale consistently resizes actual and fitted previews', () => {
       gapRatio: 0.5,
       availableWidth: 280,
       actualSize: false,
-      scale: 0.5,
     }),
     {
-      tileSize: 56,
-      gap: 28,
-      width: 140,
-      height: 140,
+      tileSize: 112,
+      gap: 56,
+      width: 280,
+      height: 280,
     },
+  );
+});
+
+test('preview interaction zooms around the pointer and supports reset state', () => {
+  assert.equal(clampPreviewScale(0.1), 0.25);
+  assert.equal(clampPreviewScale(4), 3);
+  assert.deepEqual(
+    zoomPreviewAtPoint(
+      { scale: 1, x: 0, y: 0 },
+      2,
+      { x: 30, y: -10 },
+    ),
+    { scale: 2, x: -30, y: 10 },
+  );
+  assert.deepEqual(
+    movePreview(
+      { scale: 2, x: -30, y: 10 },
+      { x: 8, y: -4 },
+    ),
+    { scale: 2, x: -22, y: 6 },
+  );
+  assert.equal(
+    isPreviewTransformReset({ scale: 1, x: 0, y: 0 }),
+    true,
+  );
+  assert.equal(
+    isPreviewTransformReset({ scale: 1.1, x: 0, y: 0 }),
+    false,
   );
 });
 
@@ -805,6 +822,27 @@ test('validates and slices an original image with a separate recipe', async () =
     }),
     /不是原图直传格式/,
   );
+});
+
+test('accepts a decodable source larger than the former byte limit', async () => {
+  const source = await sharp({
+    create: {
+      width: 80,
+      height: 100,
+      channels: 4,
+      background: '#4f70d8',
+    },
+  })
+    .png()
+    .toBuffer();
+  const paddedSource = Buffer.concat([
+    source,
+    Buffer.alloc(20 * 1024 * 1024),
+  ]);
+  assert.ok(paddedSource.length > 20 * 1024 * 1024);
+  const image = await inspectSourceImage(paddedSource, recipe);
+  assert.equal(image.width, 80);
+  assert.equal(image.height, 100);
 });
 
 test('downscales large signature tiles to the display-size ceiling', async () => {

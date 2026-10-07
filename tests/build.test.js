@@ -69,11 +69,7 @@ test('build creates a self-contained static application', async () => {
   assert.match(output, /id="grid-rows"[^>]*max="5"/);
   assert.doesNotMatch(output, /id="tile-count"|最大 10 MB|超过 10 MB/);
   assert.match(output, /id="preview-gap-ratio"[^>]*value="58"/);
-  assert.match(
-    output,
-    /id="preview-scale"[^>]*min="25"[^>]*max="300"[^>]*step="25"[^>]*value="100"/,
-  );
-  assert.match(output, /id="preview-scale-output">100%/);
+  assert.doesNotMatch(output, /id="preview-scale"|预览缩放/);
   assert.match(output, /id="precut-gap-ratio"[^>]*value="58"/);
   assert.ok(
     output.indexOf('id="precut-gap-ratio"') <
@@ -99,8 +95,13 @@ test('build creates a self-contained static application', async () => {
   assert.match(output, /previewPlatform==="mobile"/);
   assert.match(output, /id="preview-actual-size"[^>]*checked/);
   assert.match(output, />实际大小</);
-  assert.match(output, /\.output-preview\.actual-size/);
+  assert.match(output, /class="preview-content" id="preview-content"/);
   assert.match(output, /preview-viewport/);
+  assert.match(output, /\.output-preview\.preview-ready/);
+  assert.match(output, /id="preview-reset"[^>]*disabled/);
+  assert.match(output, />\s*复位\s*<\/button>/);
+  assert.match(output, /addEventListener\("wheel"/);
+  assert.match(output, /addEventListener\("pointerdown"/);
   assert.match(output, />遮罩</);
   assert.doesNotMatch(output, /最终组合效果|动图预览/);
   assert.match(output, /3370ff/i);

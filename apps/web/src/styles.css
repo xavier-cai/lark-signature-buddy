@@ -358,10 +358,6 @@ h2 {
   margin-top: 8px;
 }
 
-.preview-scale-control {
-  margin-top: 7px;
-}
-
 .switch-control {
   display: grid;
   flex: 0 0 auto;
@@ -520,6 +516,8 @@ h2 {
 
 .grid-control-row label {
   display: flex;
+  min-width: 0;
+  flex: 1;
   align-items: center;
   gap: 4px;
 }
@@ -531,7 +529,8 @@ h2 {
 }
 
 .grid-control-row input {
-  width: 44px;
+  width: 100%;
+  min-width: 0;
   height: 32px;
   padding: 0 7px;
   border: 1px solid #dfe2e9;
@@ -589,10 +588,9 @@ h2 {
 }
 
 .output-preview {
-  display: grid;
+  position: relative;
   height: 190px;
   padding: 10px;
-  place-items: center;
   border-radius: 13px;
   color: #9297a5;
   background:
@@ -601,11 +599,23 @@ h2 {
     linear-gradient(45deg, transparent 75%, #eaebef 75%) 8px -8px / 16px 16px,
     linear-gradient(-45deg, transparent 75%, #eaebef 75%) -8px 0 / 16px 16px,
     #f5f6f8;
-  overflow: auto;
+  overflow: hidden;
+  touch-action: none;
 }
 
-.output-preview.actual-size {
-  display: block;
+.output-preview.preview-ready {
+  cursor: grab;
+}
+
+.output-preview.dragging {
+  cursor: grabbing;
+}
+
+.preview-content {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
 }
 
 .preview-viewport {
@@ -615,11 +625,34 @@ h2 {
   height: max-content;
   min-height: 100%;
   place-items: center;
+  transform-origin: center;
+  will-change: transform;
 }
 
 .preview-composite {
   display: block;
   margin: 0 auto;
+}
+
+.preview-reset {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 1;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid rgba(31, 38, 56, 0.12);
+  border-radius: 8px;
+  color: #44506a;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 3px 10px rgba(33, 44, 74, 0.12);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.preview-reset:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .notice {

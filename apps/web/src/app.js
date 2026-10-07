@@ -27,6 +27,11 @@ import {
   visibleFrameRange,
 } from './frame-window.js';
 import { previewLayout } from './preview-layout.js';
+import {
+  isPreviewTransformReset,
+  movePreview,
+  zoomPreviewAtPoint,
+} from './preview-transform.js';
 
 const HANDLE_RADIUS = 9;
 // Kept in the V1 recipe for wire compatibility. The bot derives the actual
@@ -51,11 +56,11 @@ const mappingGammaInput = document.querySelector('#mapping-gamma');
 const mappingGammaOutput = document.querySelector('#mapping-gamma-output');
 const previewGapRatioInput = document.querySelector('#preview-gap-ratio');
 const previewGapOutput = document.querySelector('#preview-gap-output');
-const previewScaleInput = document.querySelector('#preview-scale');
-const previewScaleOutput = document.querySelector('#preview-scale-output');
 const precutGapRatioInput = document.querySelector('#precut-gap-ratio');
 const precutGapOutput = document.querySelector('#precut-gap-output');
 const outputPreview = document.querySelector('#output-preview');
+const previewContent = document.querySelector('#preview-content');
+const previewResetButton = document.querySelector('#preview-reset');
 const previewPlatform = document.querySelector('.preview-platform');
 const previewActualSizeInput = document.querySelector('#preview-actual-size');
 const previewMaskInput = document.querySelector('#preview-mask');
@@ -90,7 +95,8 @@ const state = {
   previewPlatform: 'pc',
   grid: '2x2',
   previewGapRatio: 0.58,
-  previewScale: 1,
+  previewTransform: { scale: 1, x: 0, y: 0 },
+  previewDrag: null,
   precutGapRatio: 0.58,
   crop: null,
   display: null,
@@ -106,6 +112,21 @@ function formatBytes(size) {
 function setNotice(message = '', type = 'error') {
   notice.textContent = message;
   notice.classList.toggle('success', type === 'success');
+}
+
+function applyPreviewTransform() {
+  const viewport = previewContent.querySelector('.preview-viewport');
+  if (viewport) {
+    const { scale, x, y } = state.previewTransform;
+    viewport.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+  }
+  previewResetButton.disabled =
+    !state.image || isPreviewTransformReset(state.previewTransform);
+}
+
+function resetPreviewTransform() {
+  state.previewTransform = { scale: 1, x: 0, y: 0 };
+  applyPreviewTransform();
 }
 
 function isSupported(file) {
@@ -375,6 +396,8 @@ async function chooseFile(file) {
     state.maskedFrameCanvas = null;
     state.maskedFrameData = null;
     state.preprocessedFrameData = null;
+    state.previewTransform = { scale: 1, x: 0, y: 0 };
+    state.previewDrag = null;
     fileDetail.textContent =
       `${image.naturalWidth} × ${image.naturalHeight} · ${animation.frameCount} 帧 · ${formatBytes(file.size)}`;
     emptyStage.hidden = true;
@@ -620,9 +643,12 @@ function renderOutputPreview() {
     state.previewTimer = null;
   }
   if (!state.image) {
-    outputPreview.innerHTML = '<span>选择图片后显示</span>';
+    outputPreview.classList.remove('preview-ready');
+    previewContent.innerHTML = '<span>选择图片后显示</span>';
+    applyPreviewTransform();
     return;
   }
+  outputPreview.classList.add('preview-ready');
   const { cols, rows } = currentGrid();
   const availableWidth = Math.max(188, outputPreview.clientWidth - 28);
   const {
@@ -636,7 +662,6 @@ function renderOutputPreview() {
     gapRatio: state.previewGapRatio,
     availableWidth,
     actualSize: state.previewActualSize,
-    scale: state.previewScale,
   });
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const tiles = sourceTileRects();
@@ -687,8 +712,8 @@ function renderOutputPreview() {
   const viewport = document.createElement('div');
   viewport.className = 'preview-viewport';
   viewport.append(preview);
-  outputPreview.classList.toggle('actual-size', state.previewActualSize);
-  outputPreview.replaceChildren(viewport);
+  previewContent.replaceChildren(viewport);
+  applyPreviewTransform();
   if (state.previewPlatform === 'mobile') {
     void drawFrame(0);
   } else if (state.animation.lazy) {
@@ -812,12 +837,6 @@ previewActualSizeInput.addEventListener('change', () => {
   if (state.image) renderOutputPreview();
 });
 
-previewScaleInput.addEventListener('input', () => {
-  state.previewScale = Number(previewScaleInput.value) / 100;
-  previewScaleOutput.textContent = `${previewScaleInput.value}%`;
-  if (state.image) renderOutputPreview();
-});
-
 function updateGridFromInputs({ commit = false } = {}) {
   let cols = gridColsInput.valueAsNumber;
   let rows = gridRowsInput.valueAsNumber;
@@ -849,6 +868,53 @@ previewGapRatioInput.addEventListener('input', () => {
   previewGapOutput.textContent = `${previewGapRatioInput.value}%`;
   if (state.image) renderOutputPreview();
 });
+
+outputPreview.addEventListener('wheel', (event) => {
+  if (!state.image) return;
+  event.preventDefault();
+  const bounds = outputPreview.getBoundingClientRect();
+  state.previewTransform = zoomPreviewAtPoint(
+    state.previewTransform,
+    event.deltaY < 0 ? 1.1 : 1 / 1.1,
+    {
+      x: event.clientX - bounds.left - bounds.width / 2,
+      y: event.clientY - bounds.top - bounds.height / 2,
+    },
+  );
+  applyPreviewTransform();
+}, { passive: false });
+
+outputPreview.addEventListener('pointerdown', (event) => {
+  if (!state.image || event.button !== 0 || event.target.closest('#preview-reset')) {
+    return;
+  }
+  outputPreview.setPointerCapture(event.pointerId);
+  state.previewDrag = { x: event.clientX, y: event.clientY };
+  outputPreview.classList.add('dragging');
+});
+
+outputPreview.addEventListener('pointermove', (event) => {
+  if (!state.previewDrag) return;
+  state.previewTransform = movePreview(state.previewTransform, {
+    x: event.clientX - state.previewDrag.x,
+    y: event.clientY - state.previewDrag.y,
+  });
+  state.previewDrag = { x: event.clientX, y: event.clientY };
+  applyPreviewTransform();
+});
+
+function finishPreviewDrag(event) {
+  if (!state.previewDrag) return;
+  state.previewDrag = null;
+  outputPreview.classList.remove('dragging');
+  if (outputPreview.hasPointerCapture(event.pointerId)) {
+    outputPreview.releasePointerCapture(event.pointerId);
+  }
+}
+
+outputPreview.addEventListener('pointerup', finishPreviewDrag);
+outputPreview.addEventListener('pointercancel', finishPreviewDrag);
+previewResetButton.addEventListener('click', resetPreviewTransform);
 
 precutGapRatioInput.addEventListener('input', () => {
   state.precutGapRatio = Number(precutGapRatioInput.value) / 100;
