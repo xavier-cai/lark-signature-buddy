@@ -31,7 +31,29 @@ test('reports every invalid title with its label', () => {
     validateTitles([
       { label: 'good', title: 'docs: explain naming' },
       { label: 'bad', title: 'Explain naming' },
+      {
+        label: 'merge',
+        title: "Merge branch 'master' into feature",
+        isMerge: true,
+      },
     ]),
     [{ label: 'bad', title: 'Explain naming' }],
+  );
+});
+
+test('does not exempt a merge-looking title on a regular commit', () => {
+  assert.deepEqual(
+    validateTitles([
+      {
+        label: 'regular',
+        title: "Merge branch 'master' into feature",
+        isMerge: false,
+      },
+    ]),
+    [{
+      label: 'regular',
+      title: "Merge branch 'master' into feature",
+      isMerge: false,
+    }],
   );
 });

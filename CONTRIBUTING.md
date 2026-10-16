@@ -34,7 +34,8 @@ The repository `commit-msg` and `pre-push` hooks enforce commit subjects. CI
 also checks every pull request title and commit so the rule applies even when
 local hooks are not installed. Because pull requests are squash-merged, the
 pull request title becomes the default-branch commit subject and must follow the
-same format.
+same format. Git-generated merge commits are exempt; all non-merge commits
+remain subject to the rule.
 
 ## Architecture rules
 

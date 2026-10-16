@@ -29,7 +29,9 @@ export function isConventionalTitle(title) {
 }
 
 export function validateTitles(entries) {
-  return entries.filter(({ title }) => !isConventionalTitle(title));
+  return entries.filter(({ title, isMerge }) => (
+    !isMerge && !isConventionalTitle(title)
+  ));
 }
 
 function usage() {
@@ -48,7 +50,7 @@ function commitEntries(revisions) {
   }
   const output = execFileSync(
     'git',
-    ['show', '--quiet', '--format=%H%x00%s', ...revisions],
+    ['show', '--quiet', '--format=%H%x00%P%x00%s', ...revisions],
     { encoding: 'utf8' },
   );
   return output
@@ -56,9 +58,24 @@ function commitEntries(revisions) {
     .split('\n')
     .filter(Boolean)
     .map((line) => {
-      const [sha, title] = line.split('\0');
-      return { label: sha.slice(0, 12), title };
+      const [sha, parents, title] = line.split('\0');
+      return {
+        label: sha.slice(0, 12),
+        title,
+        isMerge: parents.split(' ').filter(Boolean).length > 1,
+      };
     });
+}
+
+function mergeInProgress() {
+  try {
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'], {
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function revisionsForRange(range) {
@@ -101,7 +118,7 @@ function main(args) {
     entries = [{ label: 'title', title: value }];
   } else if (mode === '--message-file') {
     const title = readFileSync(value, 'utf8').split(/\r?\n/, 1)[0];
-    entries = [{ label: 'commit', title }];
+    entries = [{ label: 'commit', title, isMerge: mergeInProgress() }];
   } else if (mode === '--range') {
     entries = commitEntries(revisionsForRange(value));
   } else if (mode === '--new-tip') {
