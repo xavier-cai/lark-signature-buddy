@@ -16,6 +16,26 @@ Thanks for helping improve Lark Signature Buddy.
 7. Run `npm run security:audit` and `npm run check`.
 8. Open a pull request using the repository template.
 
+## Naming conventions
+
+Commit subjects and pull request titles must use Conventional Commits:
+
+```text
+<type>[optional scope][optional !]: <description>
+```
+
+Allowed types are `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`,
+`refactor`, `revert`, `security`, `style`, and `test`. Use an optional
+lowercase scope for a focused area, for example `fix(bot): preserve GIF frame
+delays`. Use `!` only for a breaking change and explain the break in the commit
+body or pull request.
+
+The repository `commit-msg` and `pre-push` hooks enforce commit subjects. CI
+also checks every pull request title and commit so the rule applies even when
+local hooks are not installed. Because pull requests are squash-merged, the
+pull request title becomes the default-branch commit subject and must follow the
+same format.
+
 ## Architecture rules
 
 - `apps/web` may depend on `packages/core`, browser APIs, and browser-safe

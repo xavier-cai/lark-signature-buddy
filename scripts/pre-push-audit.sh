@@ -11,8 +11,10 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   fi
   if [[ "${remote_sha:-$zero}" == "$zero" ]]; then
     range="$local_sha"
+    node "$root/scripts/check-conventional-title.mjs" --new-tip "$local_sha"
   else
     range="$remote_sha..$local_sha"
+    node "$root/scripts/check-conventional-title.mjs" --range "$range"
   fi
   "$root/scripts/run-gitleaks.sh" range "$range"
   scanned=1
