@@ -35,7 +35,7 @@ import {
 
 const HANDLE_RADIUS = 9;
 // Kept in the V1 recipe for wire compatibility. The bot derives the actual
-// output dimensions from each crop and caps its longest edge at 50 px.
+// output dimensions from each crop and caps its longest edge at 32 px.
 const LEGACY_OUTPUT_SIZE = 512;
 const uploadButton = document.querySelector('#upload-button');
 const fileInput = document.querySelector('#file-input');

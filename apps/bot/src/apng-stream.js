@@ -203,7 +203,7 @@ function extractRect(pixels, canvasWidth, rect, bytesPerPixel) {
   return output;
 }
 
-export async function writeApngFile({
+export async function createApngWriter({
   path,
   width,
   height,
@@ -213,7 +213,7 @@ export async function writeApngFile({
   indexedAlpha = false,
   alphaLevels = 256,
   gamma = 1,
-  renderFrame,
+  maxBytes = Number.POSITIVE_INFINITY,
 }) {
   if (
     indexedAlpha &&
@@ -224,9 +224,15 @@ export async function writeApngFile({
   if (!Number.isFinite(gamma) || gamma < 0 || gamma > 3) {
     throw new Error('APNG gamma 必须在 0–3 之间');
   }
+  if (!Number.isInteger(frameCount) || frameCount < 1) {
+    throw new Error('APNG 帧数必须是正整数');
+  }
   const file = await open(path, 'w', 0o600);
   let sequence = 0;
   let previous = null;
+  let appendedFrames = 0;
+  let writtenBytes = 0;
+  let closed = false;
   const mode = indexedAlpha
     ? 'indexed-alpha'
     : grayscaleAlpha
@@ -234,17 +240,40 @@ export async function writeApngFile({
       : 'rgba';
   const bytesPerPixel = mode === 'rgba' ? 4 : mode === 'grayscale-alpha' ? 2 : 1;
   const colorType = mode === 'rgba' ? 6 : mode === 'grayscale-alpha' ? 4 : 3;
+
+  async function writePart(data) {
+    if (writtenBytes + data.length > maxBytes) {
+      throw new Error(
+        `APNG 输出超过 ${(maxBytes / 1024 / 1024).toFixed(0)} MiB 上限`,
+      );
+    }
+    await file.write(data);
+    writtenBytes += data.length;
+  }
+
   try {
-    await file.write(PNG_SIGNATURE);
-    await file.write(imageHeader(width, height, colorType));
+    await writePart(PNG_SIGNATURE);
+    await writePart(imageHeader(width, height, colorType));
     if (mode === 'indexed-alpha') {
       for (const paletteChunk of alphaPalette(alphaLevels, gamma)) {
-        await file.write(paletteChunk);
+        await writePart(paletteChunk);
       }
     }
-    await file.write(animationControl(frameCount, loop));
-    for (let index = 0; index < frameCount; index += 1) {
-      const frame = await renderFrame(index);
+    await writePart(animationControl(frameCount, loop));
+  } catch (error) {
+    await file.close();
+    throw error;
+  }
+
+  return {
+    get writtenBytes() {
+      return writtenBytes;
+    },
+    async appendFrame(frame) {
+      if (closed) throw new Error('APNG writer 已关闭');
+      if (appendedFrames >= frameCount) {
+        throw new Error(`APNG 追加帧数超过声明的 ${frameCount} 帧`);
+      }
       const pixels = packFrame(frame.data, mode, alphaLevels);
       const rect = differenceRect(
         pixels,
@@ -259,7 +288,7 @@ export async function writeApngFile({
         rect,
         bytesPerPixel,
       );
-      await file.write(
+      await writePart(
         frameControl(sequence, rect, frame.delay),
       );
       sequence += 1;
@@ -272,19 +301,46 @@ export async function writeApngFile({
         ),
         { level: 9 },
       );
-      if (index === 0) {
-        await file.write(chunk('IDAT', compressed));
+      if (appendedFrames === 0) {
+        await writePart(chunk('IDAT', compressed));
       } else {
         const data = Buffer.allocUnsafe(compressed.length + 4);
         data.writeUInt32BE(sequence, 0);
         compressed.copy(data, 4);
-        await file.write(chunk('fdAT', data));
+        await writePart(chunk('fdAT', data));
         sequence += 1;
       }
       previous = pixels;
+      appendedFrames += 1;
+    },
+    async finish() {
+      if (closed) throw new Error('APNG writer 已关闭');
+      if (appendedFrames !== frameCount) {
+        throw new Error(
+          `APNG 实际帧数不一致：期望 ${frameCount} 帧，实际 ${appendedFrames} 帧`,
+        );
+      }
+      await writePart(chunk('IEND', Buffer.alloc(0)));
+      closed = true;
+      await file.close();
+    },
+    async abort() {
+      if (closed) return;
+      closed = true;
+      await file.close();
+    },
+  };
+}
+
+export async function writeApngFile(options) {
+  const writer = await createApngWriter(options);
+  try {
+    for (let index = 0; index < options.frameCount; index += 1) {
+      await writer.appendFrame(await options.renderFrame(index));
     }
-    await file.write(chunk('IEND', Buffer.alloc(0)));
-  } finally {
-    await file.close();
+    await writer.finish();
+  } catch (error) {
+    await writer.abort();
+    throw error;
   }
 }
