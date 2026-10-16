@@ -1,6 +1,7 @@
 ## Summary
 
 <!-- What changed and why? -->
+<!-- Title format: <type>[optional scope][optional !]: <description> -->
 
 ## Architecture and compatibility
 
