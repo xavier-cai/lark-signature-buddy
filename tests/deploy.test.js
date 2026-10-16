@@ -65,6 +65,23 @@ test('checked-in deployment files contain no machine-specific defaults', async (
   assert.doesNotMatch(content, /LARK_SIGNATURE_BUDDY_PROFILE=image-buddy/);
 });
 
+test('Lark document embed resizes only for trusted GitHub Pages messages', async () => {
+  const embed = await readFile(
+    join(root, 'deploy/lark-doc/github-pages-embed.html'),
+    'utf8',
+  );
+
+  assert.match(
+    embed,
+    /src="https:\/\/xavier-cai\.github\.io\/lark-signature-buddy\/"/,
+  );
+  assert.match(embed, /event\.origin !== pageOrigin/);
+  assert.match(embed, /event\.source !== frame\.contentWindow/);
+  assert.match(embed, /lark-signature-buddy:embed-height:v1/);
+  assert.match(embed, /height < 320 \|\| height > 5000/);
+  assert.match(embed, /frame\.style\.height = `\$\{height\}px`/);
+});
+
 test('bot uses the configured lark-cli executable for every subprocess', async () => {
   const source = await readFile(
     join(root, 'apps', 'bot', 'src', 'main.js'),

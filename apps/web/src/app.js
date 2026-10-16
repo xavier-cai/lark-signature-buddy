@@ -32,6 +32,7 @@ import {
   nextPreviewFrameIndex,
   zoomPreviewAtPoint,
 } from './preview-transform.js';
+import { installEmbedHeightReporter } from './embed-height.js';
 
 const HANDLE_RADIUS = 9;
 // Kept in the V1 recipe for wire compatibility. The bot derives the actual
@@ -984,4 +985,8 @@ framePicker.addEventListener('scroll', () => {
     framePickerFrame = null;
     state.framePickerRender?.();
   });
+});
+
+installEmbedHeightReporter({
+  root: document.querySelector('.shell'),
 });

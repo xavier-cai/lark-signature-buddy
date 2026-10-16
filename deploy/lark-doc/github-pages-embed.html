@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="use-iframe" content="true" />
+    <meta name="html-box-height-mode" content="auto" />
+    <meta
+      name="description"
+      content="飞书签名图片 Buddy：自动加载 GitHub Pages 最新版本并同步内容高度"
+    />
+    <title>Lark Signature Buddy</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        background: #f5f7fb;
+      }
+
+      iframe {
+        display: block;
+        width: 100%;
+        height: 900px;
+        border: 0;
+        background: #f5f7fb;
+      }
+    </style>
+  </head>
+  <body>
+    <iframe
+      id="signature-buddy"
+      src="https://xavier-cai.github.io/lark-signature-buddy/"
+      title="Lark Signature Buddy"
+      allow="clipboard-read; clipboard-write"
+      loading="eager"
+      referrerpolicy="strict-origin-when-cross-origin"
+    ></iframe>
+    <script>
+      const pageOrigin = 'https://xavier-cai.github.io';
+      const messageType = 'lark-signature-buddy:embed-height:v1';
+      const frame = document.querySelector('#signature-buddy');
+
+      window.addEventListener('message', (event) => {
+        if (
+          event.origin !== pageOrigin ||
+          event.source !== frame.contentWindow ||
+          event.data?.type !== messageType
+        ) {
+          return;
+        }
+        const height = Math.ceil(Number(event.data.height));
+        if (!Number.isFinite(height) || height < 320 || height > 5000) return;
+        frame.style.height = `${height}px`;
+      });
+    </script>
+  </body>
+</html>

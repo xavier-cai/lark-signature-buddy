@@ -128,5 +128,8 @@ test('build creates a self-contained static application', async () => {
   );
   assert.doesNotMatch(output, /生成并下载 GIF 动图/);
   assert.match(output, /mappedFrameData/);
+  assert.match(output, /lark-signature-buddy:embed-height:v1/);
+  assert.match(output, /ResizeObserver/);
+  assert.match(output, /postMessage/);
   assert.doesNotMatch(output, /src="\.\/app\.js"/);
 });
