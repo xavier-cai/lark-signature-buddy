@@ -20,7 +20,7 @@ The binary payload is 41 bytes and records:
 - luminance-to-alpha mapping flag and a 0.0–3.0 gamma value (0.1 steps);
 - legacy square output size (retained for V1 wire compatibility) and
   PNG/APNG output type; generated tiles preserve aspect ratio and are reduced
-  to at most 50 px on their longest edge;
+  to at most 32 px on their longest edge;
 - normalized source-content rectangle (fixed to the whole original image);
 - CRC32 over the preceding bytes.
 
@@ -44,9 +44,10 @@ Resource limits are enforced by shared core code:
 - 8,192 px maximum image edge;
 - 32 MP maximum static image;
 - 65,535 animation frames (the protocol field capacity);
-- 80 MP total animation decode work;
+- animated sources are decoded one frame at a time and do not have a total
+  pixel-work limit;
 - 65 output tiles (up to 13 columns × 5 rows);
-- 50 px maximum output-tile edge before the final PNG/APNG upload; long
+- 32 px maximum output-tile edge before the final PNG/APNG upload; long
   animations are reduced further against an 8 MiB worst-case raw RGBA budget
   so the encoded artifact stays below Lark's 10 MiB per-image limit;
 

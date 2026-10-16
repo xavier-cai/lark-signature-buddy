@@ -5,7 +5,7 @@ import {
   detectImageKind,
   validateStaticImageSize,
 } from './image-format.js';
-import { validateAnimationWork } from './transport.js';
+import { validateFullDecodeMemory } from './transport.js';
 
 function clampDelay(value) {
   return Math.max(20, Math.min(65535, Math.round(value || 100)));
@@ -52,7 +52,6 @@ async function openWithImageDecoder(bytes, mimeType, cacheSize) {
   const height =
     firstResult.image.displayHeight || firstResult.image.codedHeight || 0;
   validateStaticImageSize(width, height);
-  validateAnimationWork(width, height, frameCount);
 
   const cache = new Map([[0, frameFromVideoFrame(firstResult.image)]]);
   const pending = new Map();
@@ -124,7 +123,7 @@ function wrapDecodedAnimation(animation) {
 async function decodeGifFrames(bytes) {
   const gif = decodeGif(bytes);
   validateStaticImageSize(gif.width, gif.height);
-  validateAnimationWork(gif.width, gif.height, gif.frames.length);
+  validateFullDecodeMemory(gif.width, gif.height, gif.frames.length);
   const frames = decodeFrames(bytes, { gif }).map((frame) => ({
     data: frame.data,
     delay: clampDelay(frame.delay),
@@ -143,8 +142,8 @@ function decodeApngFrames(bytes) {
     bytes.byteOffset + bytes.byteLength,
   ));
   validateStaticImageSize(image.width, image.height);
+  validateFullDecodeMemory(image.width, image.height, image.frames.length);
   const rgbaFrames = UPNG.toRGBA8(image);
-  validateAnimationWork(image.width, image.height, rgbaFrames.length);
   return {
     width: image.width,
     height: image.height,
@@ -168,7 +167,7 @@ async function decodeWithImageDecoder(bytes, mimeType) {
   const width = first.image.displayWidth || first.image.codedWidth || 0;
   const height = first.image.displayHeight || first.image.codedHeight || 0;
   validateStaticImageSize(width, height);
-  validateAnimationWork(width, height, frameCount);
+  validateFullDecodeMemory(width, height, frameCount);
   const frames = [];
   for (let index = 0; index < frameCount; index += 1) {
     const { image } =
@@ -252,7 +251,6 @@ export async function encodeGifFrames({
   frames,
   loop = 0,
 }) {
-  validateAnimationWork(width, height, frames.length);
   const output = await encodeGif({
     width,
     height,
@@ -299,7 +297,6 @@ export function encodeApngBytes({
   frames,
   loop = 0,
 }) {
-  validateAnimationWork(width, height, frames.length);
   const output = new Uint8Array(UPNG.encode(
     frames.map((frame) =>
       frame.data.buffer.slice(

@@ -15,15 +15,13 @@ import process from 'node:process';
 
 import sharp from 'sharp';
 
-import {
-  decodeImageBytes,
-  encodeApngBytes,
-} from '@lark-signature-buddy/core/animation';
 import { preprocessLarkSignature } from '@lark-signature-buddy/core/color-mapping';
 import { buildTileSpecs } from '@lark-signature-buddy/core/tiles';
-import { writeApngFile } from './apng-stream.js';
+import { streamAnimationFrames } from './animation-source.js';
+import { createApngWriter } from './apng-stream.js';
 
 const DEFAULT_CONCURRENCY = 4;
+const ANIMATION_FRAME_CONCURRENCY = 2;
 const UPLOAD_STAGING_NAME = '.lark-signature-buddy-uploads';
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 export { buildTileSpecs };
@@ -48,7 +46,11 @@ async function renderAnimationFrame(
   colorMapping,
   colorMappingGamma,
 ) {
-  const data = await sharp(Buffer.from(frame.data), {
+  const data = await sharp(Buffer.from(
+    frame.data.buffer,
+    frame.data.byteOffset,
+    frame.data.byteLength,
+  ), {
     raw: {
       width: decoded.width,
       height: decoded.height,
@@ -83,27 +85,7 @@ async function renderAnimationFrame(
 
 export async function renderTile(input, spec, animation = {}) {
   if (animation.pages > 1) {
-    const decoded = animation.frames
-      ? animation
-      : await decodeImageBytes(input, `image/${animation.format}`);
-    const frames = [];
-    for (const frame of decoded.frames) {
-      frames.push(
-        await renderAnimationFrame(
-          frame,
-          decoded,
-          spec,
-          animation.colorMapping,
-          animation.colorMappingGamma,
-        ),
-      );
-    }
-    return Buffer.from(encodeApngBytes({
-      width: spec.outputWidth,
-      height: spec.outputHeight,
-      frames,
-      loop: decoded.loop,
-    }));
+    throw new Error('动图必须通过流式切片流程处理');
   }
 
   const pipeline = sharp(input, {
@@ -150,6 +132,75 @@ function imageKeyFromResponse(response) {
   return key;
 }
 
+async function mapWithConcurrency(values, concurrency, mapper) {
+  let cursor = 0;
+  let failure = null;
+  async function worker() {
+    while (!failure) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= values.length) return;
+      try {
+        await mapper(values[index], index);
+      } catch (error) {
+        failure = error;
+      }
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.max(1, Math.min(values.length, concurrency)) },
+    () => worker(),
+  ));
+  if (failure) throw failure;
+}
+
+async function renderAnimationTiles({
+  input,
+  sourceImage,
+  specs,
+  paths,
+  colorMapping,
+  colorMappingGamma,
+}) {
+  const writers = [];
+  try {
+    for (let index = 0; index < specs.length; index += 1) {
+      const spec = specs[index];
+      writers.push(await createApngWriter({
+        path: paths[index],
+        width: spec.outputWidth,
+        height: spec.outputHeight,
+        frameCount: sourceImage.pages,
+        loop: sourceImage.loop,
+        indexedAlpha: colorMapping && sourceImage.format === 'gif',
+        grayscaleAlpha: colorMapping && sourceImage.format !== 'gif',
+        gamma: colorMappingGamma,
+        maxBytes: MAX_UPLOAD_BYTES,
+      }));
+    }
+    for await (const frame of streamAnimationFrames(input, sourceImage)) {
+      await mapWithConcurrency(
+        specs,
+        ANIMATION_FRAME_CONCURRENCY,
+        async (spec, index) => {
+          const rendered = await renderAnimationFrame(
+            frame,
+            sourceImage,
+            spec,
+            colorMapping,
+            colorMappingGamma,
+          );
+          await writers[index].appendFrame(rendered);
+        },
+      );
+    }
+    await Promise.all(writers.map((writer) => writer.finish()));
+  } catch (error) {
+    await Promise.all(writers.map((writer) => writer.abort()));
+    throw error;
+  }
+}
+
 export async function generateAndUploadTiles({
   input,
   recipe,
@@ -160,67 +211,42 @@ export async function generateAndUploadTiles({
   workingDirectory = process.cwd(),
 }) {
   const specs = buildTileSpecs(recipe, sourceImage);
-  const renderAnimation = sourceImage.pages > 1
-    ? {
-      ...sourceImage,
-      ...(sourceImage.frames
-        ? {}
-        : await decodeImageBytes(input, `image/${sourceImage.format}`)),
-      colorMapping: recipe.colorMapping,
-      colorMappingGamma: recipe.colorMappingGamma,
-    }
-    : {
-      ...sourceImage,
-      colorMapping: recipe.colorMapping,
-      colorMappingGamma: recipe.colorMappingGamma,
-    };
+  const renderOptions = {
+    ...sourceImage,
+    colorMapping: recipe.colorMapping,
+    colorMappingGamma: recipe.colorMappingGamma,
+  };
   const stagingRoot = uploadStagingRoot(workingDirectory);
   await mkdir(stagingRoot, { recursive: true, mode: 0o700 });
   const directory = await mkdtemp(join(stagingRoot, 'request-'));
+  const paths = specs.map((_, index) => join(
+    directory,
+    `tile-${String(index + 1).padStart(3, '0')}.png`,
+  ));
   const imageKeys = new Array(specs.length);
   let cursor = 0;
   let failure = null;
   let uploadedCount = 0;
+
+  async function renderStaticTiles() {
+    await mapWithConcurrency(
+      specs,
+      Math.floor(concurrency) || DEFAULT_CONCURRENCY,
+      async (spec, index) => {
+        const buffer = await renderTile(input, spec, renderOptions);
+        await writeFile(paths[index], buffer, { mode: 0o600 });
+      },
+    );
+  }
 
   async function worker() {
     while (!failure) {
       const current = cursor;
       cursor += 1;
       if (current >= specs.length) return;
-      const spec = specs[current];
       const extension = 'png';
-      const path = join(
-        directory,
-        `tile-${String(current + 1).padStart(3, '0')}.${extension}`,
-      );
+      const path = paths[current];
       try {
-        if (renderAnimation.pages > 1) {
-          await writeApngFile({
-            path,
-            width: spec.outputWidth,
-            height: spec.outputHeight,
-            frameCount: renderAnimation.frames.length,
-            loop: renderAnimation.loop,
-            indexedAlpha:
-              renderAnimation.colorMapping &&
-              renderAnimation.format === 'gif',
-            grayscaleAlpha:
-              renderAnimation.colorMapping &&
-              renderAnimation.format !== 'gif',
-            gamma: renderAnimation.colorMappingGamma,
-            renderFrame: (index) =>
-              renderAnimationFrame(
-                renderAnimation.frames[index],
-                renderAnimation,
-                spec,
-                renderAnimation.colorMapping,
-                renderAnimation.colorMappingGamma,
-              ),
-          });
-        } else {
-          const buffer = await renderTile(input, spec, renderAnimation);
-          await writeFile(path, buffer, { mode: 0o600 });
-        }
         const { size } = await stat(path);
         if (size > MAX_UPLOAD_BYTES) {
           throw new Error(
@@ -260,9 +286,19 @@ export async function generateAndUploadTiles({
   }
 
   try {
-    const requestedConcurrency = renderAnimation.pages > 1
-      ? 1
-      : Math.floor(concurrency) || DEFAULT_CONCURRENCY;
+    if (sourceImage.pages > 1) {
+      await renderAnimationTiles({
+        input,
+        sourceImage,
+        specs,
+        paths,
+        colorMapping: recipe.colorMapping,
+        colorMappingGamma: recipe.colorMappingGamma,
+      });
+    } else {
+      await renderStaticTiles();
+    }
+    const requestedConcurrency = Math.floor(concurrency) || DEFAULT_CONCURRENCY;
     const workerCount = Math.max(
       1,
       Math.min(specs.length, requestedConcurrency),

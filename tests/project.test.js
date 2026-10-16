@@ -66,6 +66,7 @@ import {
   nextPreviewFrameIndex,
   zoomPreviewAtPoint,
 } from '../apps/web/src/preview-transform.js';
+import { streamAnimationFrames } from '../apps/bot/src/animation-source.js';
 import { mergeRequestState } from '../apps/bot/src/request-state.js';
 import { SerialQueue } from '../apps/bot/src/serial-queue.js';
 import { writeApngFile } from '../apps/bot/src/apng-stream.js';
@@ -86,7 +87,7 @@ import {
   isAnimatedImageBytes,
   validateStaticImageSize,
 } from '@lark-signature-buddy/core/image-format';
-import { validateAnimationWork } from '@lark-signature-buddy/core/transport';
+import { validateFullDecodeMemory } from '@lark-signature-buddy/core/transport';
 
 test('parses supported grids', () => {
   assert.deepEqual(parseGrid('2x3'), { cols: 2, rows: 3 });
@@ -685,7 +686,7 @@ test('shared tile planner enforces source bounds without a frame-tile cap', () =
 });
 
 test('recipe supports animations beyond 120 frames', () => {
-  assert.doesNotThrow(() => validateAnimationWork(16, 16, 121));
+  assert.doesNotThrow(() => validateFullDecodeMemory(16, 16, 121));
   const animated = createSignatureRecipe({
     sourceWidth: 16,
     sourceHeight: 16,
@@ -869,7 +870,7 @@ test('downscales large signature tiles to the display-size ceiling', async () =>
     height: 200,
   });
   assert.equal(spec.outputWidth, MAX_SIGNATURE_TILE_SIZE);
-  assert.equal(spec.outputHeight, 25);
+  assert.equal(spec.outputHeight, 16);
 
   for (const colorMapping of [false, true]) {
     const tile = await renderTile(source, spec, {
@@ -879,7 +880,7 @@ test('downscales large signature tiles to the display-size ceiling', async () =>
     });
     const metadata = await sharp(tile).metadata();
     assert.equal(metadata.width, MAX_SIGNATURE_TILE_SIZE);
-    assert.equal(metadata.height, 25);
+    assert.equal(metadata.height, 16);
     assert.ok(tile.length < 10 * 1024 * 1024);
   }
 });
@@ -939,7 +940,7 @@ test('uploads rendered tiles concurrently while preserving result order', async 
   }
 });
 
-test('preserves animation frames, delays, loop, and alpha in APNG tiles', async () => {
+test('streams animation frames without retaining a decoded frame array', async () => {
   const animatedRecipe = createSignatureRecipe({
     sourceWidth: 80,
     sourceHeight: 100,
@@ -983,24 +984,142 @@ test('preserves animation frames, delays, loop, and alpha in APNG tiles', async 
   assert.equal(image.pages, 2);
   assert.deepEqual(image.delay, [100, 200]);
   assert.equal(image.loop, 0);
+  assert.equal(image.frames, undefined);
 
-  const tile = await renderTile(
-    sourceImage,
-    buildTileSpecs(animatedRecipe, image)[0],
-    {
-      ...image,
-      colorMapping: animatedRecipe.colorMapping,
+  const streamed = [];
+  for await (const frame of streamAnimationFrames(sourceImage, image)) {
+    streamed.push({
+      index: frame.index,
+      delay: frame.delay,
+      bytes: frame.data.length,
+    });
+  }
+  assert.deepEqual(streamed, [
+    { index: 0, delay: 100, bytes: 80 * 100 * 4 },
+    { index: 1, delay: 200, bytes: 80 * 100 * 4 },
+  ]);
+});
+
+test('streamed GIF frames match the reference full decoder', async () => {
+  const width = 8;
+  const height = 6;
+  const frames = Array.from({ length: 3 }, (_, frameIndex) => {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let index = 0; index < data.length; index += 4) {
+      data[index + frameIndex] = 80 + frameIndex * 50;
+      data[index + 3] = index % 12 === 0 ? 0 : 255;
+    }
+    return {
+      data,
+      delay: 80 + frameIndex * 40,
+      disposal: [2, 3, 1][frameIndex],
+    };
+  });
+  const blob = await encodeGifFrames({
+    width,
+    height,
+    frames,
+    loop: 2,
+  });
+  const source = Buffer.from(await blob.arrayBuffer());
+  const reference = await decodeImageBytes(source, 'image/gif');
+  const streamed = [];
+  for await (const frame of streamAnimationFrames(source, {
+    width,
+    height,
+    pages: frames.length,
+    delay: frames.map((entry) => entry.delay),
+    loop: 2,
+    format: 'gif',
+  })) {
+    streamed.push({
+      ...frame,
+      data: frame.data.slice(),
+    });
+  }
+  assert.equal(streamed.length, reference.frames.length);
+  for (let index = 0; index < streamed.length; index += 1) {
+    assert.deepEqual(streamed[index].data, reference.frames[index].data);
+    assert.equal(streamed[index].delay, reference.frames[index].delay);
+  }
+});
+
+test('streams APNG frames with the same blend and disposal result', async () => {
+  const source = await readFile('./tests/fixtures/animated-apng.png');
+  const animatedRecipe = createSignatureRecipe({
+    sourceWidth: 16,
+    sourceHeight: 12,
+    sourceFrames: 2,
+    cols: 1,
+    rows: 1,
+    crop: { x: 0, y: 0, width: 1, height: 1 },
+    mode: 'plain',
+    gapRatio: 0.58,
+    colorMapping: false,
+    outputSize: 512,
+    contentRect: { x: 0, y: 0, width: 1, height: 1 },
+  });
+  const metadata = await inspectSourceImage(source, animatedRecipe);
+  const reference = await decodeImageBytes(source, 'image/apng');
+  const streamed = [];
+  for await (const frame of streamAnimationFrames(source, metadata)) {
+    streamed.push(frame.data.slice());
+  }
+  assert.equal(streamed.length, reference.frames.length);
+  for (let index = 0; index < streamed.length; index += 1) {
+    assert.deepEqual(streamed[index], reference.frames[index].data);
+  }
+});
+
+test('streams animated WebP one page at a time', async () => {
+  const width = 8;
+  const height = 6;
+  const frameOne = await sharp({
+    create: {
+      width,
+      height,
+      channels: 4,
+      background: '#ff0000',
     },
-  );
-  const tileSpec = buildTileSpecs(animatedRecipe, image)[0];
-  const decodedTile = await decodeImageBytes(tile, 'image/apng');
-  assert.equal(decodedTile.width, tileSpec.width);
-  assert.equal(decodedTile.height, tileSpec.height);
-  assert.equal(decodedTile.frames.length, 2);
-  assert.deepEqual(decodedTile.frames.map((frame) => frame.delay), [100, 200]);
-  assert.equal(decodedTile.loop, 0);
-  assert.ok(decodedTile.frames[0].data.some((value, index) =>
-    index % 4 === 3 && value > 0 && value < 255));
+  }).raw().toBuffer();
+  const frameTwo = await sharp({
+    create: {
+      width,
+      height,
+      channels: 4,
+      background: '#0000ff',
+    },
+  }).raw().toBuffer();
+  const source = await sharp(Buffer.concat([frameOne, frameTwo]), {
+    raw: {
+      width,
+      height: height * 2,
+      channels: 4,
+      pageHeight: height,
+    },
+  }).webp({
+    loop: 0,
+    delay: [80, 160],
+    lossless: true,
+  }).toBuffer();
+  const metadata = {
+    width,
+    height,
+    pages: 2,
+    delay: [80, 160],
+    loop: 0,
+    format: 'webp',
+  };
+  const streamed = [];
+  for await (const frame of streamAnimationFrames(source, metadata)) {
+    streamed.push(frame);
+  }
+  assert.equal(streamed.length, 2);
+  assert.deepEqual(streamed.map((frame) => frame.delay), [80, 160]);
+  assert.equal(streamed[0].data[0], 255);
+  assert.equal(streamed[0].data[2], 0);
+  assert.equal(streamed[1].data[0], 0);
+  assert.equal(streamed[1].data[2], 255);
 });
 
 test('downscales animated signature tiles before APNG encoding', async () => {
@@ -1035,17 +1154,36 @@ test('downscales animated signature tiles before APNG encoding', async () => {
   });
   const source = Buffer.from(await sourceBlob.arrayBuffer());
   const image = await inspectSourceImage(source, animatedRecipe);
-  const [spec] = buildTileSpecs(animatedRecipe, image);
-  const tile = await renderTile(source, spec, {
-    ...image,
-    colorMapping: true,
-    colorMappingGamma: 1,
-  });
-  const decoded = await decodeImageBytes(tile, 'image/apng');
+  const workingDirectory = await mkdtemp(
+    join(tmpdir(), 'lark-signature-buddy-animation-test-'),
+  );
+  let uploadedTile;
+  try {
+    await prepareUploadStaging(workingDirectory);
+    await generateAndUploadTiles({
+      input: source,
+      recipe: animatedRecipe,
+      sourceImage: image,
+      profile: 'test-profile',
+      workingDirectory,
+      runLark: async (args) => {
+        const fileArg = args[args.indexOf('--file') + 1];
+        uploadedTile = await readFile(join(
+          workingDirectory,
+          fileArg.slice('image='.length),
+        ));
+        return { data: { image_key: 'img_streamed_animation' } };
+      },
+    });
+  } finally {
+    await rm(workingDirectory, { recursive: true, force: true });
+  }
+  const decoded = await decodeImageBytes(uploadedTile, 'image/apng');
   assert.equal(decoded.width, MAX_SIGNATURE_TILE_SIZE);
-  assert.equal(decoded.height, 25);
+  assert.equal(decoded.height, 16);
   assert.equal(decoded.frames.length, 2);
-  assert.ok(tile.length < 10 * 1024 * 1024);
+  assert.equal(decoded.loop, 0);
+  assert.ok(uploadedTile.length < 10 * 1024 * 1024);
 });
 
 test('reduces long animations against the upload byte budget', () => {

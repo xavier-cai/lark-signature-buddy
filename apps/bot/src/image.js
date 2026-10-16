@@ -16,12 +16,11 @@ import process from 'node:process';
 
 import sharp from 'sharp';
 
-import { decodeImageBytes } from '@lark-signature-buddy/core/animation';
 import {
   detectImageKind,
   validateStaticImageSize,
 } from '@lark-signature-buddy/core/image-format';
-import { validateAnimationWork } from '@lark-signature-buddy/core/transport';
+import { parseApng } from './apng-source.js';
 
 const MAX_IMAGE_PIXELS = 80 * 1024 * 1024;
 const DOWNLOAD_STAGING_NAME = '.lark-signature-buddy-downloads';
@@ -39,40 +38,43 @@ export async function prepareDownloadStaging(
   return root;
 }
 
-async function decodeAnimatedWebp(bytes) {
+async function inspectAnimation(bytes, kind) {
+  if (kind.format === 'apng') {
+    const animation = parseApng(bytes);
+    validateStaticImageSize(animation.width, animation.height);
+    return {
+      width: animation.width,
+      height: animation.height,
+      pages: animation.pages,
+      delay: animation.delay,
+      loop: animation.loop,
+      format: kind.format,
+    };
+  }
   const metadata = await sharp(bytes, {
     animated: true,
-    limitInputPixels: MAX_IMAGE_PIXELS,
+    // Metadata inspection does not expand the animation. The per-frame
+    // dimensions are validated below, while decoded frames are consumed one
+    // at a time instead of being materialized as one tall libvips image.
+    limitInputPixels: false,
     failOn: 'warning',
   }).metadata();
-  const { data, info } = await sharp(bytes, {
-    animated: true,
-    limitInputPixels: MAX_IMAGE_PIXELS,
-    failOn: 'warning',
-  })
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  const pages = info.pages || 1;
-  const height = info.pageHeight || info.height / pages;
-  validateStaticImageSize(info.width, height);
-  validateAnimationWork(info.width, height, pages);
-  const frameBytes = info.width * height * 4;
+  const pages = metadata.pages || 1;
+  const height = metadata.pageHeight || metadata.height / pages;
+  validateStaticImageSize(metadata.width || 0, height);
+  if (!Number.isInteger(height) || pages < 2) {
+    throw new Error('动图元数据无效');
+  }
   return {
-    width: info.width,
+    width: metadata.width || 0,
     height,
-    frames: Array.from({ length: pages }, (_, index) => {
-      const start = index * frameBytes;
-      return {
-        data: new Uint8ClampedArray(
-          data.buffer,
-          data.byteOffset + start,
-          frameBytes,
-        ),
-        delay: Math.max(20, metadata.delay?.[index] || 100),
-      };
-    }),
+    pages,
+    delay: Array.from(
+      { length: pages },
+      (_, index) => Math.max(20, metadata.delay?.[index] || 100),
+    ),
     loop: metadata.loop ?? 0,
+    format: kind.format,
   };
 }
 
@@ -81,19 +83,10 @@ export async function inspectSourceImage(input, recipe) {
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   const kind = detectImageKind(bytes);
   const animation = kind.animated
-    ? kind.format === 'webp'
-      ? await decodeAnimatedWebp(bytes)
-      : await decodeImageBytes(bytes)
+    ? await inspectAnimation(bytes, kind)
     : null;
-  let image;
-  if (animation) {
-    image = {
-      ...animation,
-      pages: animation.frames.length,
-      delay: animation.frames.map((frame) => frame.delay),
-      format: kind.format,
-    };
-  } else {
+  let image = animation;
+  if (!image) {
     const metadata = await sharp(bytes, {
       page: 0,
       pages: 1,

@@ -5,7 +5,7 @@ import {
 } from './grid.js';
 
 export const MAX_TILES = MAX_GRID_COLS * MAX_GRID_ROWS;
-export const MAX_SIGNATURE_TILE_SIZE = 50;
+export const MAX_SIGNATURE_TILE_SIZE = 32;
 export const MAX_ANIMATED_TILE_RAW_BYTES = 8 * 1024 * 1024;
 
 function clamp(value, min, max) {
